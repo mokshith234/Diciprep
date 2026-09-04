@@ -1,0 +1,9 @@
+caspian-sdk
+google-genai
+fastapi
+uvicorn[standard]
+apscheduler
+python-dotenv
+httpx
+psycopg[binary]
+pytest
