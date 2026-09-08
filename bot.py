@@ -51,89 +51,99 @@ from outbound import post_chunks
 
 log = logging.getLogger("placementprep.bot")
 
+# ── Button Constructor (WhatsApp 20-char safety) ───────────────────
+
+def make_button(label: str, data: str) -> Button:
+    """Create Button strictly respecting WhatsApp's 20-character title limit."""
+    clean = str(label or "").strip()
+    if len(clean) > 20:
+        clean = clean[:20].strip()
+    return Button(label=clean, data=str(data))
+
+
 # ── Onboarding buttons ─────────────────────────────────────────────
 
 ONBOARDING_BUTTONS = (
-    Button(label="📄 AI Resume Score", data="onboard:ai"),
-    Button(label="📈 Placement Scorecard", data="cmd:readiness"),
-    Button(label="⚡ Instant Mock Drill", data="cmd:drill"),
+    make_button("📄 AI Resume Score", "onboard:ai"),
+    make_button("📈 Prep Scorecard", "cmd:readiness"),
+    make_button("⚡ Instant Mock Drill", "cmd:drill"),
 )
 
 TRACK_BUTTONS = (
-    Button(label="SDE Track", data="track:sde"),
-    Button(label="Data Science", data="track:ds"),
-    Button(label="Core CS", data="track:core"),
+    make_button("💻 SDE Track", "track:sde"),
+    make_button("📊 Data Science", "track:ds"),
+    make_button("⚙️ Core CS", "track:core"),
 )
 
 TARGET_PROFILE_BUTTONS = (
-    Button(label="🏢 Tier-1 / FAANG SDE", data="tp:faang"),
-    Button(label="📦 Amazon / Backend SDE", data="tp:amazon"),
-    Button(label="🪟 Microsoft / Fullstack", data="tp:microsoft"),
-    Button(label="💼 TCS / Mass Recruiters", data="tp:tcs"),
-    Button(label="📊 Data Science & AI", data="tp:ds"),
-    Button(label="⚙️ Core CS & Systems", data="tp:core"),
-    Button(label="⚡ General SDE Drill", data="tp:general"),
+    make_button("🏢 Tier-1 FAANG SDE", "tp:faang"),
+    make_button("📦 Amazon Backend", "tp:amazon"),
+    make_button("🪟 Microsoft Full", "tp:microsoft"),
+    make_button("💼 TCS Mass Tech", "tp:tcs"),
+    make_button("📊 Data Science & AI", "tp:ds"),
+    make_button("⚙️ Core CS Systems", "tp:core"),
+    make_button("⚡ General SDE Drill", "tp:general"),
 )
 
 COMPANY_BUTTONS = (
-    Button(label="🔍 Google", data="obc:google"),
-    Button(label="📦 Amazon", data="obc:amazon"),
-    Button(label="🪟 Microsoft", data="obc:microsoft"),
-    Button(label="🏢 TCS", data="obc:tcs"),
-    Button(label="💼 Infosys", data="obc:infosys"),
-    Button(label="🎯 Other / Skip", data="obc:any"),
+    make_button("🔍 Google", "obc:google"),
+    make_button("📦 Amazon", "obc:amazon"),
+    make_button("🪟 Microsoft", "obc:microsoft"),
+    make_button("🏢 TCS", "obc:tcs"),
+    make_button("💼 Infosys", "obc:infosys"),
+    make_button("🎯 Other / Skip", "obc:any"),
 )
 
 ROLE_BUTTONS = (
-    Button(label="💻 SDE / Backend", data="obr:SDE"),
-    Button(label="🌐 Frontend / Fullstack", data="obr:Frontend"),
-    Button(label="📊 Data Scientist", data="obr:Data Scientist"),
-    Button(label="⚙️ DevOps / Cloud", data="obr:DevOps"),
-    Button(label="🔐 Security / Core", data="obr:Core Engineer"),
-    Button(label="🎯 Other / Skip", data="obr:Software Engineer"),
+    make_button("💻 SDE / Backend", "obr:SDE"),
+    make_button("🌐 Fullstack / Web", "obr:Frontend"),
+    make_button("📊 Data Scientist", "obr:Data Scientist"),
+    make_button("⚙️ DevOps / Cloud", "obr:DevOps"),
+    make_button("🔐 Security / Core", "obr:Core Engineer"),
+    make_button("🎯 Other / Skip", "obr:Software Engineer"),
 )
 
 TIMELINE_BUTTONS = (
-    Button(label="🔥 This Month", data="obt:This Month"),
-    Button(label="📅 1–3 Months", data="obt:1-3 Months"),
-    Button(label="📆 3–6 Months", data="obt:3-6 Months"),
-    Button(label="🗓️ Next Year", data="obt:Next Year"),
+    make_button("🔥 This Month", "obt:This Month"),
+    make_button("📅 1–3 Months", "obt:1-3 Months"),
+    make_button("📆 3–6 Months", "obt:3-6 Months"),
+    make_button("🗓️ Next Year", "obt:Next Year"),
 )
 
 DRILL_BUTTONS = (
-    Button(label="💡 Hint", data="cmd:hint"),
-    Button(label="📖 Solution", data="cmd:solution"),
-    Button(label="⏭ Skip", data="cmd:skip"),
-    Button(label="🔄 Switch Mood", data="cmd:switch_mood"),
+    make_button("💡 Hint", "cmd:hint"),
+    make_button("📖 Solution", "cmd:solution"),
+    make_button("⏭ Skip", "cmd:skip"),
+    make_button("🔄 Switch Mood", "cmd:switch_mood"),
 )
 
 STALE_QUESTION_BUTTONS = (
-    Button(label="✍️ Answer It", data="cmd:continue_pending"),
-    Button(label="🔄 Switch Mood", data="cmd:switch_mood"),
-    Button(label="📖 Solution", data="cmd:solution"),
-    Button(label="⏭ Skip", data="cmd:skip"),
+    make_button("✍️ Answer It", "cmd:continue_pending"),
+    make_button("🔄 Switch Mood", "cmd:switch_mood"),
+    make_button("📖 Solution", "cmd:solution"),
+    make_button("⏭ Skip", "cmd:skip"),
 )
 
 SWITCH_MOOD_BUTTONS = (
-    Button(label="💻 DSA Drill", data="drill dsa"),
-    Button(label="⚙️ OS Drill", data="drill os"),
-    Button(label="🗄️ DBMS Drill", data="drill dbms"),
-    Button(label="🌐 CN Drill", data="drill cn"),
-    Button(label="🏢 Company Mock", data="cmd:menu"),
+    make_button("💻 DSA Drill", "drill dsa"),
+    make_button("⚙️ OS Drill", "drill os"),
+    make_button("🗄️ DBMS Drill", "drill dbms"),
+    make_button("🌐 CN Drill", "drill cn"),
+    make_button("🏢 Company Mock", "cmd:menu"),
 )
 
 MENU_BUTTONS = (
-    Button(label="🎯 3-Question Mock", data="cmd:drill"),
-    Button(label="📈 Placement Scorecard", data="cmd:readiness"),
-    Button(label="📄 Scan Resume", data="onboard:ai"),
-    Button(label="🔄 Switch Mood", data="cmd:switch_mood"),
+    make_button("🎯 3-Question Mock", "cmd:drill"),
+    make_button("📈 Prep Scorecard", "cmd:readiness"),
+    make_button("📄 Scan Resume", "onboard:ai"),
+    make_button("🔄 Switch Mood", "cmd:switch_mood"),
 )
 
 READINESS_BUTTONS = (
-    Button(label="⚡ 3-Question Mock", data="cmd:drill"),
-    Button(label="📄 Scan Resume", data="onboard:ai"),
-    Button(label="📑 Daily Revision", data="cmd:summary"),
-    Button(label="🔄 Switch Topic", data="cmd:switch_mood"),
+    make_button("⚡ 3-Question Mock", "cmd:drill"),
+    make_button("📄 Scan Resume", "onboard:ai"),
+    make_button("📑 Daily Revision", "cmd:summary"),
+    make_button("🔄 Switch Topic", "cmd:switch_mood"),
 )
 
 def build_welcome_message(name: str = "") -> str:
@@ -211,6 +221,14 @@ def register(cx: Caspian) -> None:
 
     @cx.on_action()
     def on_action(thread: Thread, msg: Any, ctx: HandlerContext) -> None:
+        # Instantly acknowledge Telegram callback query to clear button loading spinner
+        raw = getattr(msg, "raw", None)
+        cb_id = getattr(msg, "interaction_id", None) or (raw.get("id") if isinstance(raw, dict) else None)
+        if cb_id:
+            import threading
+            from outbound import answer_telegram_callback
+            threading.Thread(target=answer_telegram_callback, args=(str(cb_id),), daemon=True).start()
+
         data = (
             getattr(msg, "data", None)
             or getattr(ctx, "data", None)
@@ -442,8 +460,8 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
 
             fix_buttons = []
             for opt in fix_options[:3]:
-                fix_buttons.append(Button(label=f"🛠️ Fix: {opt[:18]}", data=f"fix:{opt}"))
-            fix_buttons.append(Button(label="⚡ 3-Q Mock", data="cmd:drill"))
+                fix_buttons.append(make_button(f"🛠️ Fix: {opt[:11]}", f"fix:{opt}"))
+            fix_buttons.append(make_button("⚡ 3-Question Mock", "cmd:drill"))
 
             post_chunks(thread, analysis["message"], actions=tuple(fix_buttons))
             thread.post(
@@ -672,8 +690,8 @@ def _onboard_resume(thread: Thread, phone: str, text: str) -> None:
         # Format 1-click fix buttons directly from the AI's diagnostic!
         fix_buttons = []
         for opt in fix_options[:3]:
-            fix_buttons.append(Button(label=f"🛠️ Fix: {opt[:18]}", data=f"fix:{opt}"))
-        fix_buttons.append(Button(label="🎯 Pick Target Pack", data="tp:general"))
+            fix_buttons.append(make_button(f"🛠️ Fix: {opt[:11]}", f"fix:{opt}"))
+        fix_buttons.append(make_button("🎯 Set Target Pack", "tp:general"))
 
         # Deliver the flagship audit card with the fix buttons
         post_chunks(thread, analysis["message"], actions=tuple(fix_buttons))
@@ -970,11 +988,11 @@ def _show_readiness_scorecard(thread: Thread, phone: str) -> None:
     actions = []
     active_focus = profile.get("active_focus_area")
     if active_focus:
-        actions.append(Button(label=f"🛠️ Fix: {active_focus[:16]}", data=f"fix:{active_focus}"))
+        actions.append(make_button(f"🛠️ Fix: {active_focus[:11]}", f"fix:{active_focus}"))
     actions.extend([
-        Button(label="⚡ 3-Q Mock Drill", data="cmd:drill"),
-        Button(label="📄 Scan Resume", data="onboard:ai"),
-        Button(label="📑 Daily Revision", data="cmd:summary"),
+        make_button("⚡ 3-Question Mock", "cmd:drill"),
+        make_button("📄 Scan Resume", "onboard:ai"),
+        make_button("📑 Daily Revision", "cmd:summary"),
     ])
 
     post_chunks(thread, report, actions=tuple(actions[:4]))
@@ -1091,10 +1109,10 @@ def _grade(thread: Thread, phone: str, question: str, answer: str, user: dict | 
         f"• Active Focus Area: *{active_focus}*\n\n"
         "Tap *Placement Scorecard* for your full diagnostic, or *3-Question Mock* to keep climbing!",
         actions=(
-            Button(label="📈 Placement Scorecard", data="cmd:readiness"),
-            Button(label=f"🛠️ Fix: {active_focus[:16]}", data=f"fix:{active_focus}"),
-            Button(label="⚡ 3-Question Mock", data="cmd:drill"),
-            Button(label="📑 Daily Revision", data="cmd:summary"),
+            make_button("📈 Prep Scorecard", "cmd:readiness"),
+            make_button(f"🛠️ Fix: {active_focus[:11]}", f"fix:{active_focus}"),
+            make_button("⚡ 3-Question Mock", "cmd:drill"),
+            make_button("📑 Daily Revision", "cmd:summary"),
         ),
     )
 

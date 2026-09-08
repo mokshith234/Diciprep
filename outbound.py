@@ -99,6 +99,18 @@ def send_telegram_typing(chat_id: str) -> None:
         pass
 
 
+def answer_telegram_callback(callback_id: str) -> None:
+    """Acknowledge Telegram callback query so client button stops spinning."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token or not callback_id:
+        return
+    url = f"https://api.telegram.org/bot{token}/answerCallbackQuery"
+    try:
+        httpx.post(url, json={"callback_query_id": str(callback_id)}, timeout=5)
+    except Exception:
+        pass
+
+
 def post_chunks(thread, text: str, actions=None) -> None:
     parts = chunk_text(text)
     for i, part in enumerate(parts):
