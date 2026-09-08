@@ -12,6 +12,14 @@ from outbound import send_whatsapp
 log = logging.getLogger("placementprep.jobs")
 
 
+def _send_user(phone: str, text: str) -> None:
+    if os.environ.get("TELEGRAM_BOT_TOKEN") and not os.environ.get("WHATSAPP_ACCESS_TOKEN"):
+        from outbound import send_telegram
+        send_telegram(phone, text)
+    else:
+        send_whatsapp(phone, text)
+
+
 def morning_blast() -> int:
     sent = 0
     for user in db.list_users():
@@ -21,7 +29,7 @@ def morning_blast() -> int:
             capsule = generate_capsule(track)
             question, topic = generate_question(track)
             db.set_pending(phone, question, topic, drill_remaining=0)
-            send_whatsapp(
+            _send_user(
                 phone,
                 f"☀️ *Morning Placement Capsule*\n\n{capsule}\n\n"
                 f"📝 *Question #1*\n\n{question}\n\n"
@@ -39,7 +47,7 @@ def evening_reminders() -> int:
     for user in db.users_inactive_today():
         phone = user["phone_number"]
         streak = int(user.get("streak_count") or 0)
-        send_whatsapp(
+        _send_user(
             phone,
             "🌙 *Don't break the chain*\n\n"
             f"You haven't practiced yet today. Streak: *{streak}*.\n"
@@ -62,7 +70,7 @@ def weekly_report() -> int:
             user_stats = db.stats(phone)
             user_stats["difficulty"] = user.get("difficulty") or "easy"
             report = generate_weekly_report(track, drills, user_stats)
-            send_whatsapp(phone, report)
+            _send_user(phone, report)
             sent += 1
         except Exception:
             log.exception("Weekly report failed for %s", phone)

@@ -53,20 +53,50 @@ def send_whatsapp(to: str, text: str) -> None:
             log.exception("WhatsApp send failed to %s", to)
 
 
-def send_telegram(chat_id: str, text: str) -> None:
-    """Send a text message via Telegram Bot API."""
+def send_telegram(chat_id: str, text: str, actions=None) -> None:
+    """Send a text message with optional buttons via Telegram Bot API."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
-        log.warning("Skipping Telegram send; bot token missing")
+    if not token or not chat_id:
+        log.warning("Skipping Telegram send; bot token or chat_id missing")
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    for part in chunk_text(text):
+
+    reply_markup = None
+    if actions:
+        keyboard = []
+        for btn in actions:
+            label = getattr(btn, "label", str(btn))
+            data = getattr(btn, "data", label)
+            keyboard.append([{"text": label, "callback_data": str(data)}])
+        reply_markup = {"inline_keyboard": keyboard}
+
+    parts = chunk_text(text)
+    for i, part in enumerate(parts):
+        payload: dict = {"chat_id": chat_id, "text": part, "parse_mode": "Markdown"}
+        if i == len(parts) - 1 and reply_markup:
+            payload["reply_markup"] = reply_markup
         try:
-            r = httpx.post(url, json={"chat_id": chat_id, "text": part, "parse_mode": "Markdown"}, timeout=30)
+            r = httpx.post(url, json=payload, timeout=30)
+            if r.status_code == 400 and "can't parse entities" in r.text:
+                # Markdown entity syntax error in LLM output: fallback to plain text
+                payload.pop("parse_mode", None)
+                r = httpx.post(url, json=payload, timeout=30)
             if r.status_code >= 400:
                 log.error("Telegram send failed %s %s", r.status_code, r.text)
         except httpx.HTTPError:
             log.exception("Telegram send failed to %s", chat_id)
+
+
+def send_telegram_typing(chat_id: str) -> None:
+    """Send typing status to Telegram user."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token or not chat_id:
+        return
+    url = f"https://api.telegram.org/bot{token}/sendChatAction"
+    try:
+        httpx.post(url, json={"chat_id": chat_id, "action": "typing"}, timeout=5)
+    except Exception:
+        pass
 
 
 def post_chunks(thread, text: str, actions=None) -> None:
