@@ -7,10 +7,21 @@ import logging
 from caspian import Button, Caspian, HandlerContext, Message, Thread
 
 import db
-from commands import is_followup, parse_command, parse_track_payload
+from commands import (
+    is_followup,
+    parse_command,
+    parse_company_command,
+    parse_resume_command,
+    parse_role_command,
+    parse_topic_drill,
+    parse_track_payload,
+)
 from llm import (
+    analyze_resume,
     evaluate_answer,
     explain_followup,
+    generate_company_question,
+    generate_daily_summary,
     generate_hint,
     generate_question,
     parse_score,
@@ -26,24 +37,41 @@ TRACK_BUTTONS = (
     Button(label="Core CS", data="track:core"),
 )
 
+DRILL_BUTTONS = (
+    Button(label="💡 Hint", data="cmd:hint"),
+    Button(label="📖 Solution", data="cmd:solution"),
+    Button(label="⏭ Skip", data="cmd:skip"),
+)
+
+MENU_BUTTONS = (
+    Button(label="🎯 3-Question Mock", data="cmd:drill"),
+    Button(label="📊 My Stats", data="cmd:streak"),
+    Button(label="📑 Today's Summary", data="cmd:summary"),
+)
+
 WELCOME = (
-    "\U0001f680 *Welcome to PlacementPrep AI*\n\n"
-    "Daily capsules, adaptive mocks, and instant code reviews \u2014 "
+    "🚀 *Welcome to PlacementPrep AI*\n\n"
+    "Daily capsules, adaptive mocks, instant code reviews, and resume analysis — "
     "right here on WhatsApp & Telegram.\n\n"
     "Pick your target track:"
 )
 
 HELP = (
-    "*Commands*\n"
-    "\u2022 *drill* \u2014 3-question mock\n"
-    "\u2022 *streak* \u2014 streak, solved, accuracy\n"
-    "\u2022 *solution* \u2014 skip and see the optimal answer\n"
-    "\u2022 *hint* \u2014 get a nudge without the answer\n"
-    "\u2022 *topics* \u2014 per-topic performance breakdown\n"
-    "\u2022 *level* \u2014 check your difficulty level\n"
-    "\u2022 *leaderboard* \u2014 top students\n"
-    "\u2022 *hi* \u2014 reset welcome / change track\n\n"
-    'Reply with code or an approach to get graded. Ask \u201cexplain line 4\u201d anytime.'
+    "*PlacementPrep AI Commands*\n"
+    "• *menu* — Open the on-demand practice dashboard\n"
+    "• *drill* — Start a 3-question adaptive mock interview\n"
+    "• *drill <topic>* — Practice a specific topic (e.g. `drill os`, `drill dsa`, `drill dbms`)\n"
+    "• *company <name>* — Target a company (e.g. `company amazon`, `company google`)\n"
+    "• *role <name>* — Target your dream role (e.g. `role SDE 1`, `role Backend`)\n"
+    "• *resume: <text>* — Review resume, find vulnerabilities, and get a 7-day roadmap\n"
+    "• *summary* — Daily revision cheat sheet of today's solved questions\n"
+    "• *streak* — Daily streak, solved count, and accuracy\n"
+    "• *topics* — Per-topic performance breakdown\n"
+    "• *level* — Current difficulty level\n"
+    "• *leaderboard* — Top student rankings\n"
+    "• *hint* / *solution* — Get help during a mock drill\n"
+    "• *hi* — Reset track selection\n\n"
+    "Reply with your code or step-by-step logic anytime to get graded."
 )
 
 MAX_HINTS = 2
@@ -71,21 +99,89 @@ def handle_text(thread: Thread, msg: Message, text: str) -> None:
     name = _name(msg)
     db.upsert_user(phone, name=name)
     db.bump_streak(phone)
+    user = db.get_user(phone) or db.upsert_user(phone)
 
     # --- Track selection ---
     track_choice = parse_track_payload(text)
     if track_choice:
         db.upsert_user(phone, name=name, track=track_choice)
         thread.post(
-            f"\u2705 Track set to *{track_choice}*.\n\n"
-            "Send *drill* for a 3-question mock, or just answer anything CS \u2014 I'll coach you.",
+            f"✅ Track set to *{track_choice}*.\n\n"
+            "Send *drill* for a 3-question mock, or *company <name>* to target a specific firm!",
         )
+        return
+
+    # --- Topic-specific drill (e.g. 'drill os', 'drill dsa') ---
+    topic_drill = parse_topic_drill(text)
+    if topic_drill:
+        _start_drill(thread, phone, topic=topic_drill)
+        return
+
+    # --- Company targeting (e.g. 'company amazon', 'company google') ---
+    company = parse_company_command(text)
+    if company:
+        db.update_profile(phone, target_company=company)
+        thread.post(
+            f"🏢 Target company set to *{company.capitalize()}*!\n\n"
+            f"Your mock rounds will now reflect {company.capitalize()}'s hiring bar and question patterns.\n\n"
+            "Send *drill* to start a company mock round, or *role <name>* to set your target position!"
+        )
+        return
+
+    # --- Role targeting (e.g. 'role SDE 1', 'role Backend Python') ---
+    role = parse_role_command(text)
+    if role:
+        db.update_profile(phone, target_role=role)
+        thread.post(
+            f"🎯 Target role set to *{role}*!\n\n"
+            "Now send your resume text or projects to personalize your drills:\n"
+            "`resume: <paste your skills / projects / experience>`"
+        )
+        return
+
+    # --- Resume review & tailored prep ---
+    is_res, res_content = parse_resume_command(text)
+    if is_res:
+        if not res_content:
+            thread.post(
+                "📄 *Resume Analyzer & Prep Tailoring*\n\n"
+                "Send your resume text, skills, or projects like this:\n"
+                "`resume: 3rd year CSE, built fullstack app with React/Node/Redis, skilled in Java, DSA, OS, DBMS.`\n\n"
+                "I will analyze your vulnerabilities, provide a 7-day roadmap, and tailor future drills to your stack!"
+            )
+            return
+        thread.post("🔍 *Analyzing your resume and tailoring interview drills...*")
+        try:
+            target_role = (user or {}).get("target_role") or "Software Development Engineer"
+            analysis = analyze_resume(res_content, target_role=target_role)
+            db.update_profile(phone, resume_summary=res_content[:500])
+            post_chunks(thread, analysis)
+            thread.post(
+                "✅ *Profile saved!* Your mock interview questions will now challenge you on your resume claims.\n\n"
+                "Send *drill* whenever you are ready to test your knowledge!"
+            )
+        except Exception:
+            log.exception("Resume analysis failed")
+            thread.post("Couldn't analyze your resume right now. Please try sending it again.")
         return
 
     # --- Explicit commands ---
     cmd = parse_command(text)
     if cmd == "start":
         thread.post(WELCOME, actions=TRACK_BUTTONS)
+        return
+    if cmd == "menu":
+        thread.post(
+            "🎓 *PlacementPrep On-Demand Practice*\n\n"
+            "Prepare whenever you want, 24/7:\n\n"
+            "• *Mock Interview* — 3 adaptive questions\n"
+            "• *Topic Practice* — `drill os`, `drill dsa`, `drill dbms`\n"
+            "• *Company Mock* — `company amazon`, `company google`\n"
+            "• *Resume Roadmap* — `resume: <skills/projects>`\n"
+            "• *Daily Revision* — `summary` for today's cheat sheet\n\n"
+            "Tap a quick button to start:",
+            actions=MENU_BUTTONS,
+        )
         return
     if cmd == "help":
         thread.post(HELP)
@@ -111,9 +207,17 @@ def handle_text(thread: Thread, msg: Message, text: str) -> None:
     if cmd == "leaderboard":
         _show_leaderboard(thread, phone)
         return
+    if cmd == "summary":
+        drills_today = db.get_today_drills(phone)
+        try:
+            summary = generate_daily_summary(drills_today, user or {})
+            post_chunks(thread, summary)
+        except Exception:
+            log.exception("Daily summary failed")
+            thread.post("Couldn't generate your revision summary right now. Try again shortly.")
+        return
 
     # --- Contextual handling ---
-    user = db.get_user(phone) or db.upsert_user(phone)
     pending = user.get("pending_question") if user else None
     if pending and is_followup(text):
         post_chunks(thread, explain_followup(pending, "", text))
@@ -126,27 +230,56 @@ def handle_text(thread: Thread, msg: Message, text: str) -> None:
     from llm import generate
 
     track = (user or {}).get("track") or "General SDE"
-    reply = generate(
-        f"The student (track {track}) sent this with no open mock question. "
-        f"Coach them briefly and offer to start a drill.\n\n{text}"
-    )
-    post_chunks(thread, reply)
+    try:
+        reply = generate(
+            f"The student (track {track}) sent this with no open mock question. "
+            f"Coach them briefly and offer to start a drill.\n\n{text}"
+        )
+        post_chunks(thread, reply)
+    except Exception:
+        log.exception("Open tutoring generation failed")
+        thread.post(
+            "I'm your PlacementPrep AI coach! 🎓\n\n"
+            "Here is what you can do:\n"
+            "• *drill* — Start a 3-question adaptive mock interview\n"
+            "• *drill <topic>* — Practice a specific topic (e.g. `drill os`, `drill dsa`)\n"
+            "• *company <name>* — Target a company (e.g. `company amazon`)\n"
+            "• *resume: <text>* — Review resume and tailor your questions\n"
+            "• *summary* — Daily revision cheat sheet\n"
+            "• *streak* — View your active daily streak and stats\n\n"
+            "Send *drill* to start practicing!"
+        )
 
 
 # ── Drill lifecycle ────────────────────────────────────────────────
 
-def _start_drill(thread: Thread, phone: str) -> None:
+def _start_drill(thread: Thread, phone: str, topic: str | None = None) -> None:
     user = db.upsert_user(phone)
     track = user.get("track") or "General SDE"
     difficulty = user.get("difficulty") or "easy"
-    question, topic = generate_question(track, difficulty=difficulty)
-    db.set_pending(phone, question, topic, drill_remaining=2)
+    target_company = user.get("target_company") or ""
+    resume_summary = user.get("resume_summary") or ""
+    try:
+        if target_company:
+            question, chosen_topic = generate_company_question(
+                target_company, track, topic=topic, difficulty=difficulty, resume_context=resume_summary
+            )
+        else:
+            question, chosen_topic = generate_question(track, topic=topic, difficulty=difficulty)
+    except Exception:
+        log.exception("Drill question generation failed")
+        thread.post("Couldn't generate a question right now. Send *drill* again in a moment.")
+        return
+    db.set_pending(phone, question, chosen_topic, drill_remaining=2)
     db.reset_hints(phone)
+
+    tag = f" [🏢 {target_company.capitalize()}]" if target_company else ""
     post_chunks(
         thread,
-        f"\U0001f4dd *Drill started* ({track} \u2022 {difficulty.capitalize()}) \u2014 3 questions.\n\n"
+        f"📝 *Drill started* ({track} • {difficulty.capitalize()}){tag} — 3 questions.\n\n"
         f"{question}\n\n"
-        "_Reply with your code or approach. Send *hint* for a nudge or *solution* to skip._",
+        "_Reply with your code or approach. Or use the buttons below:_",
+        actions=DRILL_BUTTONS,
     )
 
 
@@ -168,20 +301,27 @@ def _grade(thread: Thread, phone: str, question: str, answer: str, user: dict) -
     new_diff = db.update_difficulty(phone, score)
     old_diff = user.get("difficulty") or "easy"
     if new_diff != old_diff:
-        thread.post(f"\U0001f4a1 Difficulty updated: *{old_diff.capitalize()}* \u2192 *{new_diff.capitalize()}*")
+        thread.post(f"💡 Difficulty updated: *{old_diff.capitalize()}* → *{new_diff.capitalize()}*")
 
     if remaining > 0:
         difficulty = new_diff
-        nxt, topic = generate_question(track, difficulty=difficulty)
-        db.set_pending(phone, nxt, topic, drill_remaining=remaining - 1)
+        target_company = user.get("target_company") or ""
+        resume_summary = user.get("resume_summary") or ""
+        if target_company:
+            nxt, chosen_topic = generate_company_question(
+                target_company, track, difficulty=difficulty, resume_context=resume_summary
+            )
+        else:
+            nxt, chosen_topic = generate_question(track, difficulty=difficulty)
+        db.set_pending(phone, nxt, chosen_topic, drill_remaining=remaining - 1)
         db.reset_hints(phone)
-        post_chunks(thread, f"\u27a1\ufe0f *Question {4 - remaining}/3*\n\n{nxt}")
+        post_chunks(thread, f"➡️ *Question {4 - remaining}/3*\n\n{nxt}", actions=DRILL_BUTTONS)
         return
 
     db.set_pending(phone, None, None, drill_remaining=0)
     thread.post(
-        "\U0001f525 Session complete! Send *drill* for another round, "
-        "*streak* for stats, or *topics* for your performance breakdown."
+        "🔥 Session complete! Send *drill* for another round, "
+        "*summary* for today's cheat sheet, or *streak* for stats."
     )
 
 
@@ -202,10 +342,17 @@ def _give_solution(thread: Thread, phone: str) -> None:
     post_chunks(thread, body)
     if remaining > 0:
         difficulty = (user or {}).get("difficulty") or "easy"
-        nxt, topic = generate_question(track, difficulty=difficulty)
-        db.set_pending(phone, nxt, topic, drill_remaining=remaining - 1)
+        target_company = (user or {}).get("target_company") or ""
+        resume_summary = (user or {}).get("resume_summary") or ""
+        if target_company:
+            nxt, chosen_topic = generate_company_question(
+                target_company, track, difficulty=difficulty, resume_context=resume_summary
+            )
+        else:
+            nxt, chosen_topic = generate_question(track, difficulty=difficulty)
+        db.set_pending(phone, nxt, chosen_topic, drill_remaining=remaining - 1)
         db.reset_hints(phone)
-        post_chunks(thread, f"\u27a1\ufe0f Next drill question:\n\n{nxt}")
+        post_chunks(thread, f"➡️ Next drill question:\n\n{nxt}", actions=DRILL_BUTTONS)
         return
     db.set_pending(phone, None, None, drill_remaining=0)
     thread.post("Send *drill* when you want the next mock.")

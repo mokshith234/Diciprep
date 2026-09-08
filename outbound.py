@@ -69,6 +69,10 @@ def send_telegram(chat_id: str, text: str) -> None:
             log.exception("Telegram send failed to %s", chat_id)
 
 
-def post_chunks(thread, text: str) -> None:
-    for part in chunk_text(text):
-        thread.post(part)
+def post_chunks(thread, text: str, actions=None) -> None:
+    parts = chunk_text(text)
+    for i, part in enumerate(parts):
+        if i == len(parts) - 1 and actions:
+            thread.post(part, actions=actions)
+        else:
+            thread.post(part)

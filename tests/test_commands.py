@@ -1,6 +1,14 @@
 from datetime import date
 
-from commands import is_followup, parse_command, parse_track_payload
+from commands import (
+    is_followup,
+    parse_command,
+    parse_company_command,
+    parse_resume_command,
+    parse_role_command,
+    parse_topic_drill,
+    parse_track_payload,
+)
 from db import next_streak
 
 
@@ -43,3 +51,34 @@ def test_new_commands():
     assert parse_command("leaderboard") == "leaderboard"
     assert parse_command("/leaderboard") == "leaderboard"
     assert parse_command("lb") == "leaderboard"
+
+    # Action buttons
+    assert parse_command("cmd:hint") == "hint"
+    assert parse_command("cmd:solution") == "solution"
+    assert parse_command("cmd:skip") == "solution"
+
+    # Summary
+    assert parse_command("summary") == "summary"
+    assert parse_command("/summary") == "summary"
+    assert parse_command("revision") == "summary"
+
+
+def test_parameterized_features():
+    # Topic drill
+    assert parse_topic_drill("drill os") == "os"
+    assert parse_topic_drill("/drill dsa") == "dsa"
+    assert parse_topic_drill("drill dbms") == "dbms"
+    assert parse_topic_drill("drill") is None
+
+    # Company
+    assert parse_company_command("company amazon") == "amazon"
+    assert parse_company_command("/company google") == "google"
+    assert parse_company_command("target company tcs") == "tcs"
+
+    # Role & Resume
+    assert parse_role_command("role SDE 1") == "SDE 1"
+    assert parse_role_command("/role Backend (Python)") == "Backend (Python)"
+    is_res, text = parse_resume_command("resume: Built fullstack React app, skilled in Java")
+    assert is_res is True
+    assert "React" in text
+    assert parse_resume_command("/resume")[0] is True

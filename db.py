@@ -107,6 +107,9 @@ def init_db() -> None:
             ("hint_count", "INT DEFAULT 0"),
             ("consecutive_good", "INT DEFAULT 0"),
             ("consecutive_bad", "INT DEFAULT 0"),
+            ("target_company", "VARCHAR(64) DEFAULT ''"),
+            ("target_role", "VARCHAR(128) DEFAULT ''"),
+            ("resume_summary", "TEXT DEFAULT ''"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
@@ -161,6 +164,47 @@ def set_pending(phone: str, question: str | None, topic: str | None, drill_remai
                 ),
                 (question, topic, drill_remaining, phone),
             )
+
+
+def update_profile(
+    phone: str,
+    target_company: str | None = None,
+    target_role: str | None = None,
+    resume_summary: str | None = None,
+) -> dict[str, Any] | None:
+    updates = []
+    vals = []
+    if target_company is not None:
+        updates.append("target_company = ?")
+        vals.append(target_company)
+    if target_role is not None:
+        updates.append("target_role = ?")
+        vals.append(target_role)
+    if resume_summary is not None:
+        updates.append("resume_summary = ?")
+        vals.append(resume_summary)
+    if updates:
+        vals.append(phone)
+        sql = f"UPDATE users SET {', '.join(updates)} WHERE phone_number = ?"
+        with get_conn() as conn:
+            conn.execute(_q(sql), tuple(vals))
+    return get_user(phone)
+
+
+def get_today_drills(phone: str) -> list[dict[str, Any]]:
+    today_str = date.today().isoformat()
+    with get_conn() as conn:
+        if _is_postgres():
+            cur = conn.execute(
+                _q("SELECT * FROM drills WHERE phone_number = ? AND created_at::date = CURRENT_DATE ORDER BY id ASC"),
+                (phone,),
+            )
+        else:
+            cur = conn.execute(
+                _q("SELECT * FROM drills WHERE phone_number = ? AND DATE(created_at) = DATE(?) ORDER BY id ASC"),
+                (phone, today_str),
+            )
+        return [dict(r) for r in cur.fetchall()]
 
 
 def _as_date(value: Any) -> date | None:

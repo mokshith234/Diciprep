@@ -2,22 +2,20 @@ services:
   - type: web
     name: placementprep-ai
     runtime: python
-    plan: starter
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.0"
+      - key: CASPIAN_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: "openai/gpt-oss-120b"
       - key: GEMINI_API_KEY
-        sync: false
-      - key: WHATSAPP_ACCESS_TOKEN
-        sync: false
-      - key: WHATSAPP_PHONE_NUMBER_ID
-        sync: false
-      - key: WHATSAPP_APP_SECRET
-        sync: false
-      - key: WHATSAPP_VERIFY_TOKEN
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
@@ -32,5 +30,5 @@ services:
 
 databases:
   - name: placementprep-db
-    plan: basic-256mb
+    plan: free
     region: oregon

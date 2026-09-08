@@ -131,7 +131,27 @@ async def lifespan(_app: FastAPI):
     scheduler.add_job(weekly_report, CronTrigger(day_of_week="sun", hour=10, minute=0), id="weekly")
     scheduler.start()
     log.info("Scheduler on %s at %02d:00 and %02d:00", timezone_name(), morning_hour, evening_hour)
+
+    import threading
+
+    stop_caspian = threading.Event()
+
+    def _caspian_poller():
+        log.info("Starting Caspian hosted message listener")
+        while not stop_caspian.is_set():
+            try:
+                cx.run(max_iterations=10, interval=1.0)
+            except Exception as exc:
+                log.warning("Caspian listener warning: %s", exc)
+                import time
+                time.sleep(2)
+
+    poller_thread = threading.Thread(target=_caspian_poller, daemon=True)
+    poller_thread.start()
+
     yield
+
+    stop_caspian.set()
     scheduler.shutdown(wait=False)
 
 

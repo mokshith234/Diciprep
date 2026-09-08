@@ -1,7 +1,8 @@
-"""Gemini 2.5 Flash generation helpers."""
+"""LLM generation helpers: Groq (ultra-fast primary) + Google Gemini (reliable fallback)."""
 
 from __future__ import annotations
 
+import logging
 import os
 import random
 import re
@@ -11,8 +12,18 @@ from google.genai import types
 
 from prompts import DIFFICULTY_DESCRIPTORS, SYSTEM_PROMPT, TRACK_TOPICS
 
-_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+log = logging.getLogger("placementprep.llm")
+
+# Groq models (Primary: openai/gpt-oss-120b is the top free 120B model on Groq)
+_GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+_GROQ_CANDIDATE_MODELS = [_GROQ_MODEL, "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+
+# Gemini models (Fallback)
+_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+_GEMINI_CANDIDATE_MODELS = [_GEMINI_MODEL, "gemini-3.5-flash-lite", "gemini-flash-latest"]
+
 _client: genai.Client | None = None
+_groq_client = None
 
 
 def client() -> genai.Client:
@@ -25,20 +36,109 @@ def client() -> genai.Client:
     return _client
 
 
-def generate(user_prompt: str, system: str = SYSTEM_PROMPT) -> str:
-    response = client().models.generate_content(
-        model=_MODEL,
-        contents=user_prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=system,
-            temperature=0.7,
-            max_output_tokens=2048,
-        ),
-    )
-    text = (getattr(response, "text", None) or "").strip()
+def get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        key = os.environ.get("GROQ_API_KEY", "").strip()
+        if not key:
+            return None
+        from groq import Groq
+        _groq_client = Groq(api_key=key)
+    return _groq_client
+
+
+def generate_groq(user_prompt: str, system: str = SYSTEM_PROMPT) -> str | None:
+    groq_c = get_groq_client()
+    if groq_c is None:
+        return None
+    models_to_try = list(dict.fromkeys(_GROQ_CANDIDATE_MODELS))
+    for m in models_to_try:
+        try:
+            resp = groq_c.chat.completions.create(
+                model=m,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.7,
+                max_tokens=2048,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            if text:
+                return text
+        except Exception as exc:
+            log.warning("Groq model %s error: %s", m, exc)
+            continue
+    return None
+
+
+def generate_gemini(user_prompt: str, system: str = SYSTEM_PROMPT) -> str:
+    models_to_try = list(dict.fromkeys(_GEMINI_CANDIDATE_MODELS))
+    last_err: Exception | None = None
+    for model_name in models_to_try:
+        try:
+            response = client().models.generate_content(
+                model=model_name,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system,
+                    temperature=0.7,
+                    max_output_tokens=2048,
+                ),
+            )
+            text = (getattr(response, "text", None) or "").strip()
+            if text:
+                return text
+        except Exception as exc:
+            last_err = exc
+            continue
+    if last_err:
+        raise last_err
+    return "I blanked for a second — send that again?"
+
+
+def clean_chat_markdown(text: str) -> str:
+    """Sanitize LLM output for mobile messaging platforms (Telegram/WhatsApp)."""
     if not text:
-        return "I blanked for a second — send that again?"
-    return text
+        return text
+    # 1. Unpack \text{...}
+    while r"\text{" in text:
+        text = re.sub(r"\\text\{([^}]+)\}", r"\1", text)
+    # 2. Convert LaTeX fractions: \frac{A}{B} -> (A) / (B)
+    while r"\frac" in text:
+        new_text = re.sub(r"\\frac\{([^}]+)\}\{([^}]+)\}", r"(\1) / (\2)", text)
+        if new_text == text:
+            break
+        text = new_text
+    # 3. Clean common math symbols
+    text = (
+        text.replace(r"\times", "*")
+        .replace(r"\div", "/")
+        .replace(r"\le", "<=")
+        .replace(r"\ge", ">=")
+        .replace(r"\neq", "!=")
+        .replace(r"\approx", "~=")
+    )
+    # 4. Remove math dollar signs $...$
+    text = re.sub(r"\$([^\$]+)\$", r"\1", text)
+    # 5. Convert markdown **bold** to single *bold* (Telegram/WhatsApp compatible)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"*\1*", text)
+    return text.strip()
+
+
+def generate(user_prompt: str, system: str = SYSTEM_PROMPT) -> str:
+    # 1. Try Groq first for blazing speed if GROQ_API_KEY is provided
+    result = ""
+    if os.environ.get("GROQ_API_KEY", "").strip():
+        groq_result = generate_groq(user_prompt, system)
+        if groq_result:
+            result = groq_result
+
+    # 2. Fall back to Gemini
+    if not result:
+        result = generate_gemini(user_prompt, system)
+
+    return clean_chat_markdown(result)
 
 
 def pick_topic(track: str) -> str:
@@ -50,17 +150,18 @@ def generate_question(track: str, topic: str | None = None, difficulty: str = "e
     topic = topic or pick_topic(track)
     diff_desc = DIFFICULTY_DESCRIPTORS.get(difficulty, DIFFICULTY_DESCRIPTORS["easy"])
     prompt = (
-        f"Create ONE campus-placement interview question for the '{track}' track "
-        f"on topic: {topic}.\n"
+        f"Create ONE campus-placement interview question for the '{track}' track on topic: {topic}.\n"
         f"Difficulty: {difficulty.upper()} — {diff_desc}\n"
-        "Make it solvable in WhatsApp (code snippet or 4-8 line reasoning).\n"
+        "Make it solvable in a messaging chat (concise problem statement, clear input/output or scenario).\n"
         "Do not reveal the solution.\n"
-        "Format:\n"
+        "CRITICAL: Do NOT use LaTeX math ($ or \\frac). Use standard text formulas like WT = Start - Arrival.\n"
+        "Use single asterisks *bold*, never double asterisks **.\n"
+        "Format cleanly:\n"
         f"*Topic:* {topic}\n"
-        f"*Difficulty:* {difficulty.capitalize()}\n"
-        "*Question:* ...\n"
-        "*Constraints / examples:* ...\n"
-        "*Your move:* Reply with code or a step-by-step approach."
+        f"*Difficulty:* {difficulty.capitalize()}\n\n"
+        "*Question:*\n...\n\n"
+        "*Constraints / Examples:*\n...\n\n"
+        "*Your move:* Reply with your step-by-step approach or code."
     )
     return generate(prompt), topic
 
@@ -155,5 +256,81 @@ def generate_weekly_report(track: str, drills: list[dict], stats: dict) -> str:
         "• 🎯 Focus Areas (weakest 2 topics)\n"
         "• 📈 Next Week Goal (1 actionable line)\n\n"
         "Keep it under 200 words. Be encouraging but data-driven."
+    )
+    return generate(prompt)
+
+
+def generate_company_question(
+    company: str,
+    track: str,
+    topic: str | None = None,
+    difficulty: str = "medium",
+    resume_context: str = "",
+) -> tuple[str, str]:
+    topic = topic or pick_topic(track)
+    diff_desc = DIFFICULTY_DESCRIPTORS.get(difficulty, DIFFICULTY_DESCRIPTORS["medium"])
+    resume_clause = f"\nCandidate Profile & Resume Highlights: {resume_context}" if resume_context else ""
+    prompt = (
+        f"Create ONE realistic technical interview question for {company.upper()} campus/off-campus placements.\n"
+        f"Track: {track} · Topic: {topic} · Difficulty: {difficulty.upper()} ({diff_desc}){resume_clause}\n"
+        f"Reflect the actual interview pattern of {company} (e.g., algorithmic depth, system edge cases, or core CS fundamentals).\n"
+        "Make it solvable in a messaging chat.\n"
+        "Do not reveal the solution.\n"
+        "CRITICAL: Do NOT use LaTeX math ($ or \\frac). Use standard text notation.\n"
+        "Use single asterisks *bold*, never double asterisks **.\n"
+        "Format cleanly:\n"
+        f"*Company:* {company.capitalize()} Mock\n"
+        f"*Topic:* {topic} ({difficulty.capitalize()})\n\n"
+        "*Question:*\n...\n\n"
+        "*Constraints / Examples:*\n...\n\n"
+        "*Your move:* Reply with your step-by-step approach or code."
+    )
+    return generate(prompt), topic
+
+
+def analyze_resume(resume_text: str, target_role: str = "") -> str:
+    role_clause = f" for the target role: *{target_role}*" if target_role else ""
+    prompt = (
+        f"You are a Principal Tech Recruiter and Senior Engineering Interviewer evaluating a student's resume{role_clause}.\n\n"
+        f"Resume Content:\n{resume_text}\n\n"
+        "Analyze this resume with direct, brutally honest, and high-value feedback:\n"
+        "1. *Candidate Match & Key Stack:* (Core strengths, tech stack summary)\n"
+        "2. *Interview Vulnerabilities (The Grill List):* 3 specific topics, algorithms, or project claims on this resume where interviewers will grill them hardest (e.g. if they mention Redis, ask about cache invalidation)\n"
+        "3. *Missing High-Yield Skills:* 2-3 critical concepts missing for this role\n"
+        "4. *7-Day Targeted Action Plan:* Day-by-day prep plan to be interview-ready\n\n"
+        "Rules:\n"
+        "- Messaging-friendly markdown (single asterisks *bold*, clean bullet points, NO LaTeX math).\n"
+        "- Actionable and specific to Indian campus/fresher hiring.\n"
+        "- Under 350 words total."
+    )
+    return generate(prompt)
+
+
+def generate_daily_summary(drills: list[dict], user_profile: dict) -> str:
+    if not drills:
+        return (
+            "📝 *Daily Revision Summary*\n\n"
+            "You haven't practiced any questions today yet!\n"
+            "Send *drill* or *drill os* to start practicing now."
+        )
+    lines = []
+    for i, d in enumerate(drills[:15], 1):
+        q_snippet = (d.get("question_text") or "").split("\n")[0][:60]
+        lines.append(
+            f"{i}. [{d.get('topic', 'General')}] Score: {d.get('score', '?')}/10\n"
+            f"   Q: {q_snippet}...\n"
+            f"   Feedback takeaway: {(d.get('model_feedback') or '')[:120]}..."
+        )
+    drill_blob = "\n".join(lines)
+    prompt = (
+        "Generate a high-yield Daily Revision Cheat Sheet for this student based on what they solved today.\n\n"
+        f"Today's Attempts:\n{drill_blob}\n\n"
+        "Structure:\n"
+        "📑 *Daily Revision Cheat Sheet*\n"
+        f"• *Solved Today:* {len(drills)} question(s)\n"
+        "• *Key Concepts & Formulas to Remember:* (3-4 bullet points)\n"
+        "• *Edge Cases / Mistakes to Avoid:* (What went wrong in their attempts today)\n"
+        "• *Tomorrow's Recommended Drill:* (1 specific topic recommendation)\n\n"
+        "Keep it concise, high-yield, and formatted in clean WhatsApp/Telegram markdown (single asterisks *bold*, NO LaTeX math)."
     )
     return generate(prompt)
