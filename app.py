@@ -151,11 +151,19 @@ async def lifespan(_app: FastAPI):
                             data = json.loads(raw.body)
                             events = data.get("events") or []
                             if events:
-                                cx.handle("gateway", raw.body, raw.headers)
+                                threading.Thread(
+                                    target=cx.handle,
+                                    args=("gateway", raw.body, raw.headers),
+                                    daemon=True,
+                                ).start()
                         except Exception:
-                            cx.handle("gateway", raw.body, raw.headers)
+                            threading.Thread(
+                                target=cx.handle,
+                                args=("gateway", raw.body, raw.headers),
+                                daemon=True,
+                            ).start()
                 import time
-                time.sleep(1.0)
+                time.sleep(0.5)
             except Exception as exc:
                 log.warning("Caspian listener warning: %s", exc)
                 import time

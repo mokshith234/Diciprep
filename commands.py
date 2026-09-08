@@ -76,6 +76,10 @@ COMMAND_ALIASES = {
     "/clear": "clear",
     "reset": "clear",
     "/reset": "clear",
+    # Quick queries
+    "?": "help",
+    "what": "help",
+    "what?": "help",
 }
 
 
@@ -95,13 +99,34 @@ def parse_command(text: str) -> str | None:
 
 
 def parse_topic_drill(text: str) -> str | None:
-    """Matches 'drill os', '/drill dsa', 'drill system design', etc."""
-    norm = normalize(text)
+    """Matches 'drill os', '/drill dsa', 'drill system design', or bare topic names like 'ml', 'os', 'dsa'."""
+    norm = normalize(text).lower()
     m = re.match(r"^/?drill\s+([a-zA-Z0-9_\-\s]+)$", norm, re.I)
     if m:
         topic = m.group(1).strip()
         if topic.lower() not in ("now", "me", "please"):
             return topic
+
+    COMMON_TOPICS = {
+        "ml": "machine learning",
+        "machine learning": "machine learning",
+        "dsa": "dsa",
+        "os": "os",
+        "dbms": "dbms",
+        "cn": "computer networks",
+        "computer networks": "computer networks",
+        "networks": "computer networks",
+        "sql": "sql",
+        "pandas": "pandas",
+        "numpy": "numpy",
+        "python": "python",
+        "system design": "system design",
+        "oops": "oops",
+        "oop": "oops",
+        "aptitude": "aptitude",
+    }
+    if norm in COMMON_TOPICS:
+        return COMMON_TOPICS[norm]
     return None
 
 
