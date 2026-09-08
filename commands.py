@@ -71,6 +71,11 @@ COMMAND_ALIASES = {
     "cmd:continue_pending": "continue_pending",
     "answer": "continue_pending",
     "continue": "continue_pending",
+    # Self-recovery: clear stuck session
+    "clear": "clear",
+    "/clear": "clear",
+    "reset": "clear",
+    "/reset": "clear",
 }
 
 
@@ -153,7 +158,6 @@ def parse_switch_command(text: str) -> str | bool | None:
         "cancel",
         "/cancel",
         "stop",
-        "reset",
         "quit",
         "cmd:switch_mood",
         "cmd:switch",

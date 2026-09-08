@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 
 from caspian import Button, Caspian, HandlerContext, Message, Thread
 
@@ -93,6 +94,18 @@ HELP = (
     "Reply with your code or step-by-step logic anytime to get graded."
 )
 
+FALLBACK_MSG = (
+    "I'm your PlacementPrep AI coach! 🎓\n\n"
+    "Here is what you can do:\n"
+    "• *drill* — Start a 3-question adaptive mock interview\n"
+    "• *drill <topic>* — Practice a specific topic (e.g. `drill os`, `drill dsa`)\n"
+    "• *company <name>* — Target a company (e.g. `company amazon`)\n"
+    "• *resume: <text>* — Review resume and tailor your questions\n"
+    "• *summary* — Daily revision cheat sheet\n"
+    "• *streak* — View your active daily streak and stats\n\n"
+    "Send *drill* to start practicing!"
+)
+
 MAX_HINTS = 2
 
 
@@ -113,17 +126,53 @@ def register(cx: Caspian) -> None:
 
 
 def handle_text(thread: Thread, msg: Message, text: str) -> None:
-    """Central dispatcher for all incoming messages."""
+    """Central dispatcher for all incoming messages.
+
+    CRITICAL: This is wrapped in a top-level try/except so that
+    no message is ever silently lost.  Any unhandled exception will
+    send a friendly error reply instead of leaving the user staring
+    at a clock symbol.
+    """
+    try:
+        _handle_text_inner(thread, msg, text)
+    except Exception:
+        log.exception("Unhandled error in handle_text for text=%r", text[:100])
+        try:
+            thread.post(
+                "⚠️ Something went wrong on my end. Please try again!\n\n"
+                "Send *drill* to start a mock, or *hi* to reset."
+            )
+        except Exception:
+            log.exception("Failed to send error fallback message")
+
+
+def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
+    """The real message dispatcher — called inside a safety net."""
     phone = _phone(msg)
     name = _name(msg)
-    db.upsert_user(phone, name=name)
-    db.bump_streak(phone)
-    user = db.get_user(phone) or db.upsert_user(phone)
+
+    if not phone:
+        log.warning("Could not extract phone/ID from message: %r", msg)
+        thread.post("Sorry, I couldn't identify your account. Please try again.")
+        return
+
+    # Ensure user exists and bump streak — single safe block
+    try:
+        db.upsert_user(phone, name=name)
+        db.bump_streak(phone)
+    except Exception:
+        log.exception("DB upsert/streak failed for phone=%s", phone)
+        # Continue anyway — user might exist already
+
+    user = _safe_get_user(phone)
 
     # --- Track selection ---
     track_choice = parse_track_payload(text)
     if track_choice:
-        db.upsert_user(phone, name=name, track=track_choice)
+        try:
+            db.upsert_user(phone, name=name, track=track_choice)
+        except Exception:
+            log.exception("Failed to set track for %s", phone)
         thread.post(
             f"✅ Track set to *{track_choice}*.\n\n"
             "Send *drill* for a 3-question mock, or *company <name>* to target a specific firm!",
@@ -208,26 +257,11 @@ def handle_text(thread: Thread, msg: Message, text: str) -> None:
     age_seconds = db.get_pending_age_seconds(user)
     is_stale = bool(pending and age_seconds is not None and age_seconds > 900)
 
-    def _prompt_stale_question(pending_q: str, age_sec: float) -> None:
-        topic = ((user or {}).get("pending_topic") or "General").upper()
-        minutes_ago = int(age_sec // 60)
-        time_desc = f"{minutes_ago}m ago" if minutes_ago < 60 else f"{minutes_ago // 60}h ago"
-        q_snippet = pending_q.strip()
-        if len(q_snippet) > 220:
-            q_snippet = q_snippet[:220] + "..."
-        thread.post(
-            f"⏳ *You have an unanswered question from earlier ({time_desc})!*\n\n"
-            f"📌 *Topic:* {topic}\n"
-            f"{q_snippet}\n\n"
-            f"Do you want to continue answering this, or switch your mood to prep something else?",
-            actions=STALE_QUESTION_BUTTONS,
-        )
-
     # --- Explicit commands ---
     cmd = parse_command(text)
     if cmd == "start":
         if is_stale and text.lower().strip() in ("hi", "hello", "hey", "hola"):
-            _prompt_stale_question(pending, age_seconds)  # type: ignore[arg-type]
+            _prompt_stale_question(thread, user, pending, age_seconds)
             return
         db.clear_pending(phone)
         thread.post(WELCOME, actions=TRACK_BUTTONS)
@@ -261,21 +295,7 @@ def handle_text(thread: Thread, msg: Message, text: str) -> None:
         _skip_question(thread, phone)
         return
     if cmd == "continue_pending":
-        pending = (user or {}).get("pending_question")
-        topic = ((user or {}).get("pending_topic") or "General").upper()
-        if not pending:
-            thread.post("You don't have an active question. Send *drill* to start one!")
-            return
-        # Refresh pending timestamp to now so they get a fresh active window
-        db.set_pending(phone, pending, topic, drill_remaining=(user or {}).get("drill_remaining"))
-        post_chunks(
-            thread,
-            f"✍️ *Resumed!*\n\n"
-            f"📌 *Topic:* {topic}\n\n"
-            f"{pending}\n\n"
-            f"_Reply with your code, calculation, or step-by-step approach whenever you're ready!_",
-            actions=DRILL_BUTTONS,
-        )
+        _continue_pending(thread, phone, user)
         return
     if cmd == "hint":
         _give_hint(thread, phone)
@@ -290,29 +310,128 @@ def handle_text(thread: Thread, msg: Message, text: str) -> None:
         _show_leaderboard(thread, phone)
         return
     if cmd == "summary":
-        drills_today = db.get_today_drills(phone)
-        try:
-            summary = generate_daily_summary(drills_today, user or {})
-            post_chunks(thread, summary)
-        except Exception:
-            log.exception("Daily summary failed")
-            thread.post("Couldn't generate your revision summary right now. Try again shortly.")
+        _show_summary(thread, phone, user)
+        return
+    # "resume" command without content — show instructions
+    if cmd == "resume":
+        thread.post(
+            "📄 *Resume Analyzer & Prep Tailoring*\n\n"
+            "Send your resume text, skills, or projects like this:\n"
+            "`resume: 3rd year CSE, built fullstack app with React/Node/Redis, skilled in Java, DSA, OS, DBMS.`\n\n"
+            "I will analyze your vulnerabilities, provide a 7-day roadmap, and tailor future drills to your stack!"
+        )
+        return
+    # "switch" command — already handled above by parse_switch_command,
+    # but if someone types just "switch" and parse_switch_command returned True
+    # but we somehow reached here, catch it:
+    if cmd == "switch":
+        db.clear_pending(phone)
+        thread.post(
+            "🔄 *Prep Mood Switched!*\n\n"
+            "Your previous question is cleared. Pick what to prep next:",
+            actions=SWITCH_MOOD_BUTTONS,
+        )
+        return
+    if cmd == "clear":
+        db.force_clear_all_state(phone)
+        thread.post(
+            "🧹 *Session cleared!* All pending questions and state wiped.\n\n"
+            "You're starting fresh. Send *drill* for a new mock, or *hi* to pick a track!",
+            actions=MENU_BUTTONS,
+        )
         return
 
     # --- Contextual handling ---
     if pending:
         if is_stale and not looks_like_answer(text) and not is_followup(text):
-            _prompt_stale_question(pending, age_seconds)  # type: ignore[arg-type]
+            _prompt_stale_question(thread, user, pending, age_seconds)
             return
 
         if is_followup(text):
-            post_chunks(thread, explain_followup(pending, "", text))
+            try:
+                post_chunks(thread, explain_followup(pending, "", text))
+            except Exception:
+                log.exception("Follow-up explanation failed")
+                thread.post("Couldn't generate the explanation. Try asking again!")
             return
 
         _grade(thread, phone, pending, text, user)
         return
 
     # --- Open tutoring (no pending question) ---
+    _open_tutoring(thread, phone, text, user)
+
+
+# ── Helpers extracted for clarity & safety ──────────────────────────
+
+def _safe_get_user(phone: str) -> dict | None:
+    """Get user from DB with error protection."""
+    try:
+        return db.get_user(phone)
+    except Exception:
+        log.exception("Failed to get_user for phone=%s", phone)
+        return None
+
+
+def _prompt_stale_question(thread: Thread, user: dict | None, pending_q: str, age_sec: float | None) -> None:
+    """Show the stale question prompt with full error safety."""
+    try:
+        topic = ((user or {}).get("pending_topic") or "General").upper()
+        minutes_ago = int((age_sec or 0) // 60)
+        time_desc = f"{minutes_ago}m ago" if minutes_ago < 60 else f"{minutes_ago // 60}h ago"
+        q_snippet = (pending_q or "").strip()
+        if len(q_snippet) > 220:
+            q_snippet = q_snippet[:220] + "..."
+        thread.post(
+            f"⏳ *You have an unanswered question from earlier ({time_desc})!*\n\n"
+            f"📌 *Topic:* {topic}\n"
+            f"{q_snippet}\n\n"
+            f"Do you want to continue answering this, or switch your mood to prep something else?",
+            actions=STALE_QUESTION_BUTTONS,
+        )
+    except Exception:
+        log.exception("Failed to show stale question prompt")
+        thread.post(
+            "You have an unanswered question from earlier.\n"
+            "Send *skip* to clear it, or *drill* for a new question!"
+        )
+
+
+def _continue_pending(thread: Thread, phone: str, user: dict | None) -> None:
+    """Resume a pending question."""
+    pending = (user or {}).get("pending_question")
+    topic = ((user or {}).get("pending_topic") or "General").upper()
+    if not pending:
+        thread.post("You don't have an active question. Send *drill* to start one!")
+        return
+    # Refresh pending timestamp to now so they get a fresh active window
+    try:
+        db.set_pending(phone, pending, topic, drill_remaining=(user or {}).get("drill_remaining"))
+    except Exception:
+        log.exception("Failed to refresh pending_at for %s", phone)
+    post_chunks(
+        thread,
+        f"✍️ *Resumed!*\n\n"
+        f"📌 *Topic:* {topic}\n\n"
+        f"{pending}\n\n"
+        f"_Reply with your code, calculation, or step-by-step approach whenever you're ready!_",
+        actions=DRILL_BUTTONS,
+    )
+
+
+def _show_summary(thread: Thread, phone: str, user: dict | None) -> None:
+    """Generate and send daily summary."""
+    try:
+        drills_today = db.get_today_drills(phone)
+        summary = generate_daily_summary(drills_today, user or {})
+        post_chunks(thread, summary)
+    except Exception:
+        log.exception("Daily summary failed")
+        thread.post("Couldn't generate your revision summary right now. Try again shortly.")
+
+
+def _open_tutoring(thread: Thread, phone: str, text: str, user: dict | None) -> None:
+    """Handle open-ended messages when no command or pending question applies."""
     from llm import generate
 
     track = (user or {}).get("track") or "General SDE"
@@ -324,23 +443,13 @@ def handle_text(thread: Thread, msg: Message, text: str) -> None:
         post_chunks(thread, reply)
     except Exception:
         log.exception("Open tutoring generation failed")
-        thread.post(
-            "I'm your PlacementPrep AI coach! 🎓\n\n"
-            "Here is what you can do:\n"
-            "• *drill* — Start a 3-question adaptive mock interview\n"
-            "• *drill <topic>* — Practice a specific topic (e.g. `drill os`, `drill dsa`)\n"
-            "• *company <name>* — Target a company (e.g. `company amazon`)\n"
-            "• *resume: <text>* — Review resume and tailor your questions\n"
-            "• *summary* — Daily revision cheat sheet\n"
-            "• *streak* — View your active daily streak and stats\n\n"
-            "Send *drill* to start practicing!"
-        )
+        thread.post(FALLBACK_MSG)
 
 
 # ── Drill lifecycle ────────────────────────────────────────────────
 
 def _start_drill(thread: Thread, phone: str, topic: str | None = None) -> None:
-    user = db.upsert_user(phone)
+    user = _safe_get_user(phone) or db.upsert_user(phone)
     track = user.get("track") or "General SDE"
     difficulty = user.get("difficulty") or "easy"
     target_company = user.get("target_company") or ""
@@ -356,8 +465,11 @@ def _start_drill(thread: Thread, phone: str, topic: str | None = None) -> None:
         log.exception("Drill question generation failed")
         thread.post("Couldn't generate a question right now. Send *drill* again in a moment.")
         return
-    db.set_pending(phone, question, chosen_topic, drill_remaining=2)
-    db.reset_hints(phone)
+    try:
+        db.set_pending(phone, question, chosen_topic, drill_remaining=2)
+        db.reset_hints(phone)
+    except Exception:
+        log.exception("Failed to save pending question for %s", phone)
 
     tag = f" [🏢 {target_company.capitalize()}]" if target_company else ""
     post_chunks(
@@ -369,7 +481,8 @@ def _start_drill(thread: Thread, phone: str, topic: str | None = None) -> None:
     )
 
 
-def _grade(thread: Thread, phone: str, question: str, answer: str, user: dict) -> None:
+def _grade(thread: Thread, phone: str, question: str, answer: str, user: dict | None) -> None:
+    user = user or {}
     track = user.get("track") or "General SDE"
     topic = user.get("pending_topic") or "general"
     try:
@@ -378,33 +491,54 @@ def _grade(thread: Thread, phone: str, question: str, answer: str, user: dict) -
         log.exception("Gemini grade failed")
         thread.post("Couldn't reach the interviewer model. Try again in a few seconds.")
         return
+
     score = parse_score(feedback)
-    db.record_attempt(phone, topic, question, answer, feedback, score)
+
+    try:
+        db.record_attempt(phone, topic, question, answer, feedback, score)
+    except Exception:
+        log.exception("Failed to record attempt for %s", phone)
+
     remaining = int(user.get("drill_remaining") or 0)
     post_chunks(thread, feedback)
 
     # Adaptive difficulty
-    new_diff = db.update_difficulty(phone, score)
-    old_diff = user.get("difficulty") or "easy"
-    if new_diff != old_diff:
-        thread.post(f"💡 Difficulty updated: *{old_diff.capitalize()}* → *{new_diff.capitalize()}*")
+    try:
+        new_diff = db.update_difficulty(phone, score)
+        old_diff = user.get("difficulty") or "easy"
+        if new_diff != old_diff:
+            thread.post(f"💡 Difficulty updated: *{old_diff.capitalize()}* → *{new_diff.capitalize()}*")
+    except Exception:
+        log.exception("Difficulty update failed for %s", phone)
+        new_diff = user.get("difficulty") or "easy"
 
     if remaining > 0:
         difficulty = new_diff
         target_company = user.get("target_company") or ""
         resume_summary = user.get("resume_summary") or ""
-        if target_company:
-            nxt, chosen_topic = generate_company_question(
-                target_company, track, difficulty=difficulty, resume_context=resume_summary
+        try:
+            if target_company:
+                nxt, chosen_topic = generate_company_question(
+                    target_company, track, difficulty=difficulty, resume_context=resume_summary
+                )
+            else:
+                nxt, chosen_topic = generate_question(track, difficulty=difficulty)
+            db.set_pending(phone, nxt, chosen_topic, drill_remaining=remaining - 1)
+            db.reset_hints(phone)
+            post_chunks(thread, f"➡️ *Question {4 - remaining}/3*\n\n{nxt}", actions=DRILL_BUTTONS)
+        except Exception:
+            log.exception("Next drill question generation failed")
+            db.clear_pending(phone)
+            thread.post(
+                "Couldn't generate the next question. Your progress is saved.\n"
+                "Send *drill* to start a new round!"
             )
-        else:
-            nxt, chosen_topic = generate_question(track, difficulty=difficulty)
-        db.set_pending(phone, nxt, chosen_topic, drill_remaining=remaining - 1)
-        db.reset_hints(phone)
-        post_chunks(thread, f"➡️ *Question {4 - remaining}/3*\n\n{nxt}", actions=DRILL_BUTTONS)
         return
 
-    db.set_pending(phone, None, None, drill_remaining=0)
+    try:
+        db.set_pending(phone, None, None, drill_remaining=0)
+    except Exception:
+        log.exception("Failed to clear pending after drill completion")
     thread.post(
         "🔥 Session complete! Send *drill* for another round, "
         "*summary* for today's cheat sheet, or *streak* for stats."
@@ -412,7 +546,7 @@ def _grade(thread: Thread, phone: str, question: str, answer: str, user: dict) -
 
 
 def _give_solution(thread: Thread, phone: str) -> None:
-    user = db.get_user(phone)
+    user = _safe_get_user(phone)
     pending = (user or {}).get("pending_question")
     if not pending:
         thread.post("No open question. Send *drill* to start one.")
@@ -430,22 +564,30 @@ def _give_solution(thread: Thread, phone: str) -> None:
         difficulty = (user or {}).get("difficulty") or "easy"
         target_company = (user or {}).get("target_company") or ""
         resume_summary = (user or {}).get("resume_summary") or ""
-        if target_company:
-            nxt, chosen_topic = generate_company_question(
-                target_company, track, difficulty=difficulty, resume_context=resume_summary
-            )
-        else:
-            nxt, chosen_topic = generate_question(track, difficulty=difficulty)
-        db.set_pending(phone, nxt, chosen_topic, drill_remaining=remaining - 1)
-        db.reset_hints(phone)
-        post_chunks(thread, f"➡️ Next drill question:\n\n{nxt}", actions=DRILL_BUTTONS)
+        try:
+            if target_company:
+                nxt, chosen_topic = generate_company_question(
+                    target_company, track, difficulty=difficulty, resume_context=resume_summary
+                )
+            else:
+                nxt, chosen_topic = generate_question(track, difficulty=difficulty)
+            db.set_pending(phone, nxt, chosen_topic, drill_remaining=remaining - 1)
+            db.reset_hints(phone)
+            post_chunks(thread, f"➡️ Next drill question:\n\n{nxt}", actions=DRILL_BUTTONS)
+        except Exception:
+            log.exception("Next question after solution failed")
+            db.clear_pending(phone)
+            thread.post("Couldn't generate the next question. Send *drill* to try again!")
         return
-    db.set_pending(phone, None, None, drill_remaining=0)
+    try:
+        db.set_pending(phone, None, None, drill_remaining=0)
+    except Exception:
+        log.exception("Failed to clear pending after solution")
     thread.post("Send *drill* when you want the next mock.")
 
 
 def _skip_question(thread: Thread, phone: str) -> None:
-    user = db.get_user(phone)
+    user = _safe_get_user(phone)
     if not user or not user.get("pending_question"):
         thread.post("No active question to skip. Send *drill* to start one!")
         return
@@ -460,7 +602,7 @@ def _skip_question(thread: Thread, phone: str) -> None:
 # ── Hint system ────────────────────────────────────────────────────
 
 def _give_hint(thread: Thread, phone: str) -> None:
-    user = db.get_user(phone)
+    user = _safe_get_user(phone)
     pending = (user or {}).get("pending_question")
     if not pending:
         thread.post("No open question. Send *drill* to start one.")
@@ -472,8 +614,8 @@ def _give_hint(thread: Thread, phone: str) -> None:
             "Send your best attempt or *solution* to see the answer."
         )
         return
-    new_count = db.increment_hints(phone)
     try:
+        new_count = db.increment_hints(phone)
         hint = generate_hint(pending, new_count)
     except Exception:
         log.exception("Gemini hint failed")
@@ -491,7 +633,12 @@ def _give_hint(thread: Thread, phone: str) -> None:
 # ── Analytics & info commands ──────────────────────────────────────
 
 def _show_topics(thread: Thread, phone: str) -> None:
-    topics = db.topic_stats(phone)
+    try:
+        topics = db.topic_stats(phone)
+    except Exception:
+        log.exception("Topic stats query failed")
+        thread.post("Couldn't load topic stats. Try again!")
+        return
     if not topics:
         thread.post("No topic data yet. Complete a *drill* first!")
         return
@@ -505,7 +652,7 @@ def _show_topics(thread: Thread, phone: str) -> None:
 
 
 def _show_level(thread: Thread, phone: str) -> None:
-    user = db.get_user(phone) or db.upsert_user(phone)
+    user = _safe_get_user(phone) or db.upsert_user(phone)
     difficulty = (user.get("difficulty") or "easy").capitalize()
     good = int(user.get("consecutive_good") or 0)
     bad = int(user.get("consecutive_bad") or 0)
@@ -523,7 +670,12 @@ def _show_level(thread: Thread, phone: str) -> None:
 
 
 def _show_leaderboard(thread: Thread, phone: str) -> None:
-    rows = db.leaderboard()
+    try:
+        rows = db.leaderboard()
+    except Exception:
+        log.exception("Leaderboard query failed")
+        thread.post("Couldn't load the leaderboard. Try again!")
+        return
     if not rows:
         thread.post("Leaderboard is empty. Be the first \u2014 send *drill*!")
         return
@@ -539,67 +691,97 @@ def _show_leaderboard(thread: Thread, phone: str) -> None:
     # Show requester's position if not in top 10
     phones_in_lb = [r["phone_number"] for r in rows]
     if phone not in phones_in_lb:
-        s = db.stats(phone)
-        lines.append(f"\n\u2014\n\U0001f464 *You:* {s['accuracy']}% acc \u2022 {s['solved']} Qs")
+        try:
+            s = db.stats(phone)
+            lines.append(f"\n\u2014\n\U0001f464 *You:* {s['accuracy']}% acc \u2022 {s['solved']} Qs")
+        except Exception:
+            pass
     thread.post("\n".join(lines))
 
 
 def _streak_card(phone: str) -> str:
-    s = db.stats(phone)
-    user = db.get_user(phone) or {}
-    difficulty = (user.get("difficulty") or "easy").capitalize()
-    return (
-        "\U0001f4ca *Your PlacementPrep stats*\n\n"
-        f"\U0001f525 Streak: *{s['streak']}* day(s)\n"
-        f"\u2705 Questions solved: *{s['solved']}*\n"
-        f"\U0001f3af Accuracy (score \u2265 7): *{s['accuracy']}%*\n"
-        f"\U0001f3af Track: *{s['track']}*\n"
-        f"\U0001f4aa Level: *{difficulty}*\n\n"
-        "Keep the chain alive \u2014 morning capsule drops at 8:00 AM."
-    )
+    try:
+        s = db.stats(phone)
+        user = _safe_get_user(phone) or {}
+        difficulty = (user.get("difficulty") or "easy").capitalize()
+        return (
+            "\U0001f4ca *Your PlacementPrep stats*\n\n"
+            f"\U0001f525 Streak: *{s['streak']}* day(s)\n"
+            f"\u2705 Questions solved: *{s['solved']}*\n"
+            f"\U0001f3af Accuracy (score \u2265 7): *{s['accuracy']}%*\n"
+            f"\U0001f3af Track: *{s['track']}*\n"
+            f"\U0001f4aa Level: *{difficulty}*\n\n"
+            "Keep the chain alive \u2014 morning capsule drops at 8:00 AM."
+        )
+    except Exception:
+        log.exception("Streak card generation failed")
+        return "Couldn't load your stats right now. Try *streak* again!"
 
 
-# ── Helpers ────────────────────────────────────────────────────────
+# ── Sender extraction (robust, crash-proof) ────────────────────────
 
 def _parse_sender(msg: Message) -> tuple[str, str]:
-    sender = getattr(msg, "sender", None)
-    addr, name = "", ""
-    if isinstance(sender, dict):
-        addr = str(sender.get("address") or "")
-        name = str(sender.get("name") or "")
-    elif sender:
-        s = str(sender).strip()
-        if s.startswith("{") and "address" in s:
-            import ast
+    """Extract (phone/address, display_name) from a Caspian message.
+
+    Handles both dict-style and string-style sender payloads.
+    Guaranteed to never raise — returns ("", "") in worst case.
+    """
+    try:
+        sender = getattr(msg, "sender", None)
+        addr, name = "", ""
+
+        if isinstance(sender, dict):
+            addr = str(sender.get("address") or "")
+            name = str(sender.get("name") or "")
+        elif sender:
+            s = str(sender).strip()
+            if s.startswith("{") and "address" in s:
+                # Try ast.literal_eval for dict-like string
+                try:
+                    import ast
+                    d = ast.literal_eval(s)
+                    if isinstance(d, dict):
+                        addr = str(d.get("address") or "")
+                        name = str(d.get("name") or "")
+                except Exception:
+                    pass
+                # Fallback: regex extraction
+                if not addr:
+                    import re
+                    m_addr = re.search(r"['\"]address['\"]\s*:\s*['\"]([^'\"]+)['\"]", s)
+                    m_name = re.search(r"['\"]name['\"]\s*:\s*['\"]([^'\"]+)['\"]", s)
+                    addr = m_addr.group(1) if m_addr else ""
+                    name = m_name.group(1) if m_name else ""
+            else:
+                addr = s
+
+        # Fallback: use thread_id
+        if not addr:
+            tid = str(getattr(msg, "thread_id", "") or "")
+            if tid:
+                addr = tid.split(":", 1)[-1]
+
+        # Try to extract name from raw contacts (WhatsApp)
+        if not name:
             try:
-                d = ast.literal_eval(s)
-                if isinstance(d, dict):
-                    addr = str(d.get("address") or "")
-                    name = str(d.get("name") or "")
+                raw = getattr(msg, "raw", None)
+                if isinstance(raw, dict):
+                    contacts = raw.get("contacts") or []
+                    if contacts and isinstance(contacts[0], dict):
+                        profile = contacts[0].get("profile") or {}
+                        name = str(profile.get("name") or "")
             except Exception:
                 pass
-            if not addr:
-                import re
-                m_addr = re.search(r"['\"]address['\"]\s*:\s*['\"]([^'\"]+)['\"]", s)
-                m_name = re.search(r"['\"]name['\"]\s*:\s*['\"]([^'\"]+)['\"]", s)
-                addr = m_addr.group(1) if m_addr else s
-                name = m_name.group(1) if m_name else ""
-        else:
-            addr = s
 
-    if not addr:
-        tid = str(getattr(msg, "thread_id", "") or "")
-        addr = tid.split(":", 1)[-1]
-
-    if not name:
-        raw = getattr(msg, "raw", None)
-        if isinstance(raw, dict):
-            contacts = raw.get("contacts") or []
-            if contacts and isinstance(contacts[0], dict):
-                profile = contacts[0].get("profile") or {}
-                name = str(profile.get("name") or "")
-
-    return addr, name
+        return addr.strip(), name.strip()
+    except Exception:
+        log.exception("_parse_sender crashed")
+        # Last resort: try thread_id
+        try:
+            tid = str(getattr(msg, "thread_id", "") or "")
+            return tid.split(":", 1)[-1], ""
+        except Exception:
+            return "", ""
 
 
 def _phone(msg: Message) -> str:

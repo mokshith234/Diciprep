@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from typing import Any, Iterator
+
+log = logging.getLogger("placementprep.db")
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 SQLITE_PATH = os.environ.get("SQLITE_PATH", "placementprep.db")
@@ -188,6 +191,29 @@ def set_pending(phone: str, question: str | None, topic: str | None, drill_remai
 
 def clear_pending(phone: str) -> None:
     set_pending(phone, None, None, drill_remaining=0)
+
+
+def force_clear_all_state(phone: str) -> None:
+    """Nuclear reset: wipe ALL session state for a user.
+
+    Use when a user is stuck due to corrupted DB state.
+    Preserves: name, track, stats, drills history.
+    Clears: pending question, hints, drill counter, pending_at.
+    """
+    with get_conn() as conn:
+        conn.execute(
+            _q(
+                "UPDATE users SET "
+                "pending_question = NULL, "
+                "pending_topic = NULL, "
+                "drill_remaining = 0, "
+                "hint_count = 0, "
+                "pending_at = NULL "
+                "WHERE phone_number = ?"
+            ),
+            (phone,),
+        )
+    log.info("Force-cleared all session state for phone=%s", phone)
 
 
 def get_pending_age_seconds(user: dict[str, Any] | None) -> float | None:
