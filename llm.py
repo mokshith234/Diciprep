@@ -339,22 +339,17 @@ def generate_daily_summary(drills: list[dict], user_profile: dict) -> str:
 def extract_skills_from_resume(resume_text: str) -> str:
     """Extract skills, strengths, and gaps from pasted resume text.
 
-    Returns a conversational analysis to show the user what AI detected,
-    formatted for messaging apps.
+    Token-optimized for fast, low-latency mobile messaging.
     """
     prompt = (
-        "You are an expert campus placement coach analyzing a student's resume/skills.\n\n"
-        f"Resume / Skills / Projects:\n{resume_text}\n\n"
-        "Respond with EXACTLY this structure (messaging-friendly markdown, single asterisks *bold*):\n\n"
-        "🔍 *Here's what I found in your profile:*\n\n"
-        "💪 *Your Strengths:*\n"
-        "• (list 3-4 key skills/technologies detected)\n\n"
-        "⚠️ *Potential Weak Areas:*\n"
-        "• (list 2-3 gaps or areas that need prep based on what's missing)\n\n"
-        "🎯 *Recommended Track:* (pick: Software Development / Data Science / Core CS)\n\n"
-        "📊 *Difficulty:* (easy / medium / hard based on experience level)\n\n"
-        "Keep it under 150 words. Be specific about detected tech stack. "
-        "Do NOT use LaTeX math. Use single asterisks for bold."
+        "You are an expert campus placement coach analyzing a student's profile.\n\n"
+        f"Resume/Text:\n{resume_text[:1200]}\n\n"
+        "Respond with EXACTLY this structure:\n\n"
+        "🔍 *Profile Highlights:*\n"
+        "💪 *Strengths:* (comma-separated top 3-4 skills/tech)\n"
+        "⚠️ *Weak Areas:* (comma-separated 2-3 interview gap topics)\n"
+        "🎯 *Recommended Track:* (Software Development / Data Science / Core CS)\n\n"
+        "Rules: strictly under 60 words. Be ultra-concise to save tokens. Single asterisks *bold*, no LaTeX."
     )
     return generate(prompt)
 
@@ -365,35 +360,24 @@ def generate_prep_plan(
     role: str,
     timeline: str,
 ) -> str:
-    """Generate a personalized, actionable prep plan from gathered onboarding info.
-
-    Returns the plan + a recommended first drill topic.
-    """
+    """Generate a personalized, actionable prep plan from gathered onboarding info."""
     prompt = (
-        "You are an elite campus placement strategist creating a hyper-personalized prep plan.\n\n"
-        f"*Student Profile:*\n"
-        f"• Resume/Skills: {resume_text[:600]}\n"
-        f"• Target Company: {company}\n"
-        f"• Target Role: {role}\n"
-        f"• Timeline: {timeline}\n\n"
-        "Create a sharp, actionable placement prep plan in this EXACT structure:\n\n"
-        "🚀 *Your Personalized Prep Plan*\n\n"
-        f"🏢 *Target:* {role} at {company}\n"
-        f"⏰ *Timeline:* {timeline}\n\n"
-        "📋 *Week-by-Week Roadmap:*\n"
-        "• Week 1: (focus area + specific actions)\n"
-        "• Week 2: (focus area + specific actions)\n"
-        "• Week 3: (focus area + specific actions)\n"
-        "• Week 4: (focus area + specific actions)\n\n"
-        "🎯 *Daily Prep Routine:*\n"
-        "• Morning: (what to do)\n"
-        "• Evening: (what to do)\n\n"
-        "⚡ *Start Now:*\n"
-        "Your weakest area based on resume analysis is: (topic). "
-        "I'll start your first drill on this right away!\n\n"
+        "You are an elite campus placement strategist.\n"
+        f"Target: {role} @ {company} | Timeline: {timeline}\n"
+        f"Background: {resume_text[:400]}\n\n"
+        "Create a hyper-concise placement action plan:\n\n"
+        "🚀 *Personalized Placement Roadmap*\n"
+        f"🎯 *Goal:* {role} @ {company} ({timeline})\n\n"
+        "📋 *Focus Plan:*\n"
+        "• Phase 1: (key technical focus)\n"
+        "• Phase 2: (mock drills & interview focus)\n"
+        "• Daily Habit: (1-line morning & evening routine)\n\n"
+        "⚡ *Kickoff Drill:*\n"
+        "Weakest area identified: (topic). Starting live questions now!\n\n"
         "CRITICAL: On the VERY LAST LINE of your response, write EXACTLY:\n"
         "FIRST_DRILL_TOPIC: <topic>\n"
         "where <topic> is one of: DSA, DBMS, OS, CN, OOP, SQL, aptitude\n\n"
-        "Rules: messaging-friendly markdown, single asterisks *bold*, NO LaTeX. Under 300 words."
+        "Rules: strictly under 110 words. Single asterisks for bold. No LaTeX."
     )
     return generate(prompt)
+

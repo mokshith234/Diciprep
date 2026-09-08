@@ -22,6 +22,7 @@ from commands import (
     parse_resume_command,
     parse_role_command,
     parse_switch_command,
+    parse_target_profile,
     parse_topic_drill,
     parse_track_payload,
 )
@@ -54,6 +55,16 @@ TRACK_BUTTONS = (
     Button(label="SDE Track", data="track:sde"),
     Button(label="Data Science", data="track:ds"),
     Button(label="Core CS", data="track:core"),
+)
+
+TARGET_PROFILE_BUTTONS = (
+    Button(label="🏢 Tier-1 / FAANG SDE", data="tp:faang"),
+    Button(label="📦 Amazon / Backend SDE", data="tp:amazon"),
+    Button(label="🪟 Microsoft / Fullstack", data="tp:microsoft"),
+    Button(label="💼 TCS / Mass Recruiters", data="tp:tcs"),
+    Button(label="📊 Data Science & AI", data="tp:ds"),
+    Button(label="⚙️ Core CS & Systems", data="tp:core"),
+    Button(label="⚡ General SDE Drill", data="tp:general"),
 )
 
 COMPANY_BUTTONS = (
@@ -266,6 +277,11 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
             "Targeting SDE-1 backend roles at Tier-1 companies.`\n\n"
             "📋 *Simply paste your resume or summary below to get started!* 👇"
         )
+        return
+
+    # ── Quick target profile pack selection (anytime button tap) ──
+    if text.strip().lower().startswith("tp:"):
+        _onboard_target_profile(thread, phone, text, user)
         return
 
     # ── Onboarding state machine (multi-step AI flow) ──
@@ -521,6 +537,8 @@ def _handle_onboarding(thread: Thread, phone: str, text: str, user: dict | None,
 
     if step == "awaiting_resume":
         _onboard_resume(thread, phone, text)
+    elif step == "awaiting_target_profile":
+        _onboard_target_profile(thread, phone, text, user)
     elif step == "awaiting_company":
         _onboard_company(thread, phone, text, user)
     elif step == "awaiting_role":
@@ -535,7 +553,7 @@ def _handle_onboarding(thread: Thread, phone: str, text: str, user: dict | None,
 
 
 def _onboard_resume(thread: Thread, phone: str, text: str) -> None:
-    """Step 1: User pasted resume text → AI extracts skills → ask company."""
+    """Step 1: User pasted resume text → AI extracts skills → ask combined target."""
     # Ignore very short messages (probably accidental)
     if len(text.strip()) < 15:
         thread.post(
@@ -562,18 +580,88 @@ def _onboard_resume(thread: Thread, phone: str, text: str) -> None:
 
         post_chunks(thread, analysis)
 
-        # Move to next step
-        db.set_onboarding_step(phone, "awaiting_company")
+        # Move to combined single-step target selection (saves turns and tokens!)
+        db.set_onboarding_step(phone, "awaiting_target_profile")
         thread.post(
-            "\n🏢 *Which company are you targeting?*\n\n"
-            "Tap a button or type any company name:",
-            actions=COMPANY_BUTTONS,
+            "🎯 *LOCK YOUR TARGET CAREER GOAL*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Choose a target pack below to configure your company questions, role focus, "
+            "and timeline together in *1 click*:\n\n"
+            "• *Tier-1 / FAANG* — Google, Amazon, Meta (SDE • 1–3 mos)\n"
+            "• *Amazon / Backend* — Distributed systems & DSA (1–3 mos)\n"
+            "• *Microsoft / Fullstack* — Web systems & Algorithms (1–3 mos)\n"
+            "• *TCS / Mass Recruiters* — Aptitude, Core CS & Coding (This Month)\n"
+            "• *Data Science & AI* — Python, ML, SQL (1–3 mos)\n"
+            "• *Core CS* — Operating Systems, DBMS & Networks (1–3 mos)\n"
+            "• *General SDE* — Universal coding drills (Immediate)\n\n"
+            "💬 _Or send your custom target in one line:_\n"
+            "`Company, Role, Timeline` (e.g. `Google, SDE, 2 months`)",
+            actions=TARGET_PROFILE_BUTTONS,
         )
     except Exception:
         log.exception("Resume skill extraction failed for %s", phone)
         thread.post(
             "⚠️ Couldn't analyze that right now. Please try pasting your resume again!"
         )
+
+
+def _onboard_target_profile(thread: Thread, phone: str, text: str, user: dict | None) -> None:
+    """Consolidated Step: User picks a target pack or sends custom 1-line target.
+
+    Extracts company, role, timeline, and track in ONE SINGLE SHOT!
+    Generates prep plan and immediately starts the first drill!
+    """
+    profile = parse_target_profile(text)
+    if not profile:
+        profile = {
+            "company": text.strip() or "General Tech",
+            "role": "Software Engineer",
+            "timeline": "1-3 Months",
+            "track": "Software Development",
+        }
+
+    company = profile["company"]
+    role = profile["role"]
+    timeline = profile["timeline"]
+    track = profile["track"]
+
+    try:
+        db.update_profile(phone, target_company=company, target_role=role)
+        db.upsert_user(phone, track=track)
+    except Exception:
+        log.exception("Failed to save target profile for %s", phone)
+
+    user = _safe_get_user(phone) or {}
+    resume = user.get("resume_summary") or "General engineering student"
+
+    thread.post("⚡ *Building your personalized roadmap...*")
+
+    try:
+        plan = generate_prep_plan(resume, company, role, timeline)
+        first_topic = _extract_first_drill_topic(plan)
+        clean_plan = _re.sub(r'\n?FIRST_DRILL_TOPIC:.*$', '', plan, flags=_re.MULTILINE).strip()
+
+        post_chunks(thread, clean_plan)
+        db.complete_onboarding(phone)
+
+        if "month" in timeline.lower():
+            db.update_difficulty(phone, 7)  # Push to medium
+
+        thread.post(
+            f"🎉 *Target Locked:* {role} @ {company}!\n\n"
+            f"🎯 Launching your kickoff mock drill on *{first_topic.upper()}*...\n\n"
+            "_Reply with your code or step-by-step logic to get graded._",
+        )
+
+        _start_drill(thread, phone, topic=first_topic)
+    except Exception:
+        log.exception("Prep plan generation failed for %s", phone)
+        db.complete_onboarding(phone)
+        thread.post(
+            f"✅ *Target Locked:* {role} @ {company}!\n\n"
+            "Starting your mock interview now:",
+        )
+        _start_drill(thread, phone)
 
 
 def _onboard_company(thread: Thread, phone: str, text: str, user: dict | None) -> None:

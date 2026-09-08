@@ -260,3 +260,95 @@ def parse_onboard_timeline(text: str) -> str | None:
         return norm[4:].strip()
     return None
 
+
+TARGET_PROFILES = {
+    "tp:faang": {
+        "company": "Tier-1 / FAANG",
+        "role": "Software Development Engineer",
+        "timeline": "1-3 Months",
+        "track": "Software Development",
+    },
+    "tp:amazon": {
+        "company": "Amazon",
+        "role": "Backend SDE",
+        "timeline": "1-3 Months",
+        "track": "Software Development",
+    },
+    "tp:microsoft": {
+        "company": "Microsoft",
+        "role": "Fullstack SDE",
+        "timeline": "1-3 Months",
+        "track": "Software Development",
+    },
+    "tp:tcs": {
+        "company": "TCS & Mass Recruiters",
+        "role": "Software Engineer",
+        "timeline": "This Month",
+        "track": "Core CS",
+    },
+    "tp:ds": {
+        "company": "Data & AI Firms",
+        "role": "Data Scientist",
+        "timeline": "1-3 Months",
+        "track": "Data Science",
+    },
+    "tp:core": {
+        "company": "Core Systems",
+        "role": "Systems Engineer",
+        "timeline": "1-3 Months",
+        "track": "Core CS",
+    },
+    "tp:general": {
+        "company": "General Tech",
+        "role": "Software Engineer",
+        "timeline": "Immediate",
+        "track": "Software Development",
+    },
+}
+
+
+def parse_target_profile(text: str) -> dict | None:
+    """Parse a single combined target selection (button payload or 1-line text).
+    
+    Returns dict with keys: company, role, timeline, track.
+    """
+    norm = normalize(text).lower()
+    if norm in TARGET_PROFILES:
+        return dict(TARGET_PROFILES[norm])
+
+    raw = normalize(text)
+    if not raw:
+        return None
+
+    # Handle comma-separated custom input e.g. "Google, SDE, 2 months"
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if len(parts) >= 3:
+        company = parts[0]
+        role = parts[1]
+        timeline = parts[2]
+    elif len(parts) == 2:
+        company = parts[0]
+        role = parts[1]
+        timeline = "1-3 Months"
+    else:
+        company = parts[0]
+        role = "Software Engineer"
+        timeline = "1-3 Months"
+
+    # Infer track from role/company
+    combined = (company + " " + role).lower()
+    if any(k in combined for k in ("data", "ml", "ai", "machine learning", "analyst")):
+        track = "Data Science"
+    elif any(k in combined for k in ("core", "os", "embedded", "network", "system")):
+        track = "Core CS"
+    else:
+        track = "Software Development"
+
+    return {
+        "company": company,
+        "role": role,
+        "timeline": timeline,
+        "track": track,
+    }
+
+

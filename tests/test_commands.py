@@ -133,3 +133,40 @@ def test_pending_age():
 
     assert db.get_pending_age_seconds({}) is None
     assert db.get_pending_age_seconds(None) is None
+
+
+def test_target_profile():
+    from commands import parse_target_profile
+
+    # Preset button payloads
+    faang = parse_target_profile("tp:faang")
+    assert faang is not None
+    assert "FAANG" in faang["company"]
+    assert faang["track"] == "Software Development"
+
+    amazon = parse_target_profile("tp:amazon")
+    assert amazon["company"] == "Amazon"
+    assert amazon["role"] == "Backend SDE"
+
+    ds = parse_target_profile("tp:ds")
+    assert ds["track"] == "Data Science"
+
+    core = parse_target_profile("tp:core")
+    assert core["track"] == "Core CS"
+
+    # Freeform comma-separated input
+    custom = parse_target_profile("Google, SDE, 2 months")
+    assert custom["company"] == "Google"
+    assert custom["role"] == "SDE"
+    assert custom["timeline"] == "2 months"
+    assert custom["track"] == "Software Development"
+
+    # Freeform 2 parts
+    custom2 = parse_target_profile("Meta, ML Engineer")
+    assert custom2["company"] == "Meta"
+    assert custom2["role"] == "ML Engineer"
+    assert custom2["track"] == "Data Science"
+
+    # None on empty
+    assert parse_target_profile("") is None
+
