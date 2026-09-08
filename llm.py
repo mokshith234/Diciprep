@@ -439,3 +439,225 @@ def generate_prep_plan(
     )
     return generate(prompt)
 
+
+def render_readiness_bar(score: int) -> str:
+    """Render a visual progress bar for readiness score (0-100)."""
+    score = max(0, min(100, int(score or 0)))
+    filled = score // 10
+    empty = 10 - filled
+    return f"[{'■' * filled}{'□' * empty}] {score}%"
+
+
+def score_and_analyze_resume(resume_text: str, target_role: str = "") -> dict[str, Any]:
+    """Flagship feature: in-depth ATS & interview readiness scoring, skill breakdown,
+    vulnerabilities, recommended track, and 3 actionable fix choices for interactive buttons.
+    """
+    role_clause = f" for target role: '{target_role}'" if target_role else ""
+    prompt = (
+        "You are a Senior Principal Tech Recruiter and Bar-Raiser Interviewer evaluating a candidate's resume"
+        f"{role_clause}.\n\n"
+        f"Resume Content:\n{resume_text[:2500]}\n\n"
+        "Conduct a comprehensive, honest diagnostic audit. Return your response in this EXACT structured key format:\n\n"
+        "OVERALL_SCORE: <integer 35-95 representing absolute industry readiness>\n"
+        "ATS_DEPTH: <integer 1-35>\n"
+        "PROJECT_IMPACT: <integer 1-30>\n"
+        "CORE_CS: <integer 1-25>\n"
+        "PRESENTATION: <integer 1-10>\n"
+        "RECOMMENDED_TRACK: <Software Development / Data Science / Core CS>\n"
+        "STRENGTHS: <3 key technical strengths, separated by commas>\n"
+        "VULNERABILITIES: <3 specific topics or claims where interviewers will grill them hardest, separated by semicolons>\n"
+        "MISSING_SKILLS: <3 high-yield industry skills missing from their profile, separated by commas>\n"
+        "FIX_OPTION_1: <Short 2-4 word technical gap topic to fix first, e.g. Caching & Redis>\n"
+        "FIX_OPTION_2: <Short 2-4 word technical gap topic to fix second, e.g. Dynamic Programming>\n"
+        "FIX_OPTION_3: <Short 2-4 word technical gap topic to fix third, e.g. DBMS Indexing & ACID>\n"
+        "COACH_SUMMARY: <2-sentence encouraging summary of candidate placement potential>\n\n"
+        "Rules: No double asterisks. No LaTeX math. Strict key-value output."
+    )
+
+    raw = generate(prompt)
+
+    data: dict[str, Any] = {
+        "score": 68,
+        "ats": 22,
+        "impact": 20,
+        "core_cs": 16,
+        "presentation": 7,
+        "track": "Software Development",
+        "strengths": "Python, Problem Solving, Web Development",
+        "vulnerabilities": "Distributed systems scale; Concurrency & threading; Edge-case handling in algorithms",
+        "missing_skills": "System Design, Unit Testing, SQL Optimization",
+        "fix_options": [
+            ("🛠️ Fix: Caching & System Design", "fix:System Design"),
+            ("🛠️ Fix: DP & Graph Traversal", "fix:DSA"),
+            ("🛠️ Fix: OS & DBMS Fundamentals", "fix:DBMS"),
+        ],
+        "coach_summary": "Solid foundational background with strong upside. Addressing key core gaps will significantly boost shortlist rates.",
+    }
+
+    import re
+    for line in raw.split("\n"):
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        k = k.strip().upper()
+        v = v.strip()
+        if k == "OVERALL_SCORE":
+            m = re.search(r"\d+", v)
+            if m:
+                data["score"] = max(25, min(98, int(m.group())))
+        elif k == "ATS_DEPTH":
+            m = re.search(r"\d+", v)
+            if m:
+                data["ats"] = int(m.group())
+        elif k == "PROJECT_IMPACT":
+            m = re.search(r"\d+", v)
+            if m:
+                data["impact"] = int(m.group())
+        elif k == "CORE_CS":
+            m = re.search(r"\d+", v)
+            if m:
+                data["core_cs"] = int(m.group())
+        elif k == "PRESENTATION":
+            m = re.search(r"\d+", v)
+            if m:
+                data["presentation"] = int(m.group())
+        elif k == "RECOMMENDED_TRACK":
+            if "data" in v.lower():
+                data["track"] = "Data Science"
+            elif "core" in v.lower():
+                data["track"] = "Core CS"
+            else:
+                data["track"] = "Software Development"
+        elif k == "STRENGTHS":
+            data["strengths"] = v
+        elif k == "VULNERABILITIES":
+            data["vulnerabilities"] = v
+        elif k == "MISSING_SKILLS":
+            data["missing_skills"] = v
+        elif k == "COACH_SUMMARY":
+            data["coach_summary"] = v
+        elif k in ("FIX_OPTION_1", "FIX_OPTION_2", "FIX_OPTION_3"):
+            idx = int(k[-1]) - 1
+            clean_opt = re.sub(r"^[•\-\d\.]+\s*", "", v).strip()
+            if clean_opt and idx < len(data["fix_options"]):
+                short_label = clean_opt[:24]
+                data["fix_options"][idx] = (f"🛠️ Fix: {short_label}", f"fix:{clean_opt[:32]}")
+
+    bar = render_readiness_bar(data["score"])
+
+    strengths_lines = "\n".join(f"• {s.strip()}" for s in str(data["strengths"]).split(",") if s.strip())
+    vuln_lines = "\n".join(f"• {v.strip()}" for v in str(data["vulnerabilities"]).split(";") if v.strip())
+    missing_lines = "\n".join(f"• {m.strip()}" for m in str(data["missing_skills"]).split(",") if m.strip())
+
+    message = (
+        "🎯 *RESUME PLACEMENT AUDIT*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 *ATS & Placement Score:* *{data['score']}/100*\n"
+        f"{bar}\n\n"
+        "📋 *Readiness Breakdown:*\n"
+        f"• Technical & ATS Depth: *{data['ats']}/35*\n"
+        f"• Project Impact & Metrics: *{data['impact']}/30*\n"
+        f"• Core CS Fundamentals: *{data['core_cs']}/25*\n"
+        f"• Clarity & Presentation: *{data['presentation']}/10*\n\n"
+        "💪 *Key Strengths:*\n"
+        f"{strengths_lines or '• Strong foundational skills'}\n\n"
+        "⚠️ *Interview Vulnerabilities (The Grill List):*\n"
+        f"{vuln_lines or '• Depth on advanced system constraints'}\n\n"
+        "🔍 *Missing High-Yield Skills:*\n"
+        f"{missing_lines or '• Production-grade architectural patterns'}\n\n"
+        f"🎯 *Recommended Track:* *{data['track']}*\n\n"
+        "💡 *Mentor Feedback:*\n"
+        f"_{data['coach_summary']}_\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "👇 *Which weakness do you want to repair first? Tap to start targeted drills:*"
+    )
+
+    data["formatted_message"] = message
+    return data
+
+
+def generate_readiness_report(profile: dict[str, Any]) -> str:
+    """Generate the user's real-time Placement Readiness Scorecard."""
+    name = profile.get("name") or "Candidate"
+    track = profile.get("track") or "General SDE"
+    score = int(profile.get("readiness_score") or 65)
+    solved = int(profile.get("solved") or 0)
+    correct = int(profile.get("correct") or 0)
+    streak = int(profile.get("streak") or 0)
+    accuracy = profile.get("accuracy", 0.0)
+    diff = str(profile.get("difficulty") or "easy").upper()
+    focus = profile.get("active_focus_area") or ""
+    company = profile.get("target_company") or ""
+    role = profile.get("target_role") or ""
+
+    bar = render_readiness_bar(score)
+
+    target_line = ""
+    if company or role:
+        target_line = f"🎯 *Target Goal:* {role or 'SDE'} @ {company or 'Tier-1 Tech'}\n"
+
+    focus_line = f"🎯 *Active Focus Weakness:* *{focus}*\n" if focus else "🎯 *Active Focus Weakness:* _None selected (pick a drill to set)_\n"
+
+    if score >= 85:
+        tier_title = "🌟 Tier-1 / FAANG Ready"
+        tier_tip = "You are in the top 10% of campus candidates. Focus on system design and edge-case optimization."
+    elif score >= 70:
+        tier_title = "⚡ SDE-1 / Product Company Ready"
+        tier_tip = "Great consistency! A few more high-accuracy drills in your focus areas will push you to Tier-1 readiness."
+    elif score >= 50:
+        tier_title = "📈 Developing Candidate"
+        tier_tip = "Solid baseline. Build your daily streak and practice code edge cases to break into 75%+."
+    else:
+        tier_title = "🌱 Early Stage Placement Aspirant"
+        tier_tip = "Start with fundamental DSA & Core CS questions. Daily practice of just 1-2 questions yields rapid gains."
+
+    return (
+        "📊 *PLACEMENT READINESS SCORECARD*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 *Candidate:* {name}\n"
+        f"💻 *Track:* {track}\n"
+        f"{target_line}"
+        f"📈 *Composite Placement Readiness:* *{score}/100*\n"
+        f"{bar}\n\n"
+        "🏆 *Performance Metrics:*\n"
+        f"• Questions Solved: *{solved}*\n"
+        f"• Accuracy Rate: *{accuracy}%* ({correct} correct)\n"
+        f"• Consistency Streak: *🔥 {streak} Day(s)*\n"
+        f"• Adaptive Level: *{diff}*\n\n"
+        f"{focus_line}\n"
+        f"🎖️ *Current Assessment:* *{tier_title}*\n"
+        f"_{tier_tip}_\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Send *drill* for adaptive practice, *topics* to explore domains, or *hi* for main menu."
+    )
+
+
+def generate_morning_capsule_with_score(profile: dict[str, Any]) -> tuple[str, str]:
+    """Create an inspiring morning capsule featuring current readiness score and streak."""
+    track = profile.get("track") or "General SDE"
+    score = int(profile.get("readiness_score") or 65)
+    streak = int(profile.get("streak") or 1)
+    focus = profile.get("active_focus_area") or ""
+    bar = render_readiness_bar(score)
+
+    topic = focus if focus else pick_topic(track)
+
+    prompt = (
+        f"Write an invigorating 8:00 AM Placement Capsule for a {track} student.\n"
+        f"Their current placement readiness score is {score}/100 with a {streak}-day streak.\n"
+        f"Today's recommended practice topic: {topic}.\n"
+        "Include: 1 punchy industry engineering reality, 1 high-yield technical takeaway on this topic, "
+        "and 1 motivational placement tip. Under 110 words. Single asterisks for bold, no LaTeX."
+    )
+    capsule = generate(prompt)
+
+    header = (
+        "☀️ *MORNING PLACEMENT CAPSULE*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📈 *Today's Placement Readiness:* *{score}/100*  \n{bar}\n"
+        f"🔥 *Streak:* *{streak} Day(s)* | 🎯 *Today's Focus:* *{topic}*\n\n"
+        f"{capsule}\n"
+    )
+    return header, topic
+

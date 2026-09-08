@@ -6,7 +6,12 @@ import logging
 import os
 
 import db
-from llm import generate_capsule, generate_question, generate_weekly_report
+from llm import (
+    generate_capsule,
+    generate_morning_capsule_with_score,
+    generate_question,
+    generate_weekly_report,
+)
 from outbound import send_whatsapp
 
 log = logging.getLogger("placementprep.jobs")
@@ -26,14 +31,15 @@ def morning_blast() -> int:
         phone = user["phone_number"]
         track = user.get("track") or "General SDE"
         try:
-            capsule = generate_capsule(track)
-            question, topic = generate_question(track)
+            profile = db.get_readiness_profile(phone)
+            capsule, target_topic = generate_morning_capsule_with_score(profile)
+            question, topic = generate_question(track, topic=target_topic)
             db.set_pending(phone, question, topic, drill_remaining=0)
             _send_user(
                 phone,
-                f"☀️ *Morning Placement Capsule*\n\n{capsule}\n\n"
-                f"📝 *Question #1*\n\n{question}\n\n"
-                "_Reply to get graded. *drill* for a 3-Q mock. *streak* for stats._",
+                f"{capsule}\n\n"
+                f"📝 *Targeted Diagnostic Question*\n\n{question}\n\n"
+                "_Reply to get graded. Send *score* for full report, or *drill* for 3-Q mock._",
             )
             sent += 1
         except Exception:

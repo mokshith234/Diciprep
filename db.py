@@ -77,6 +77,10 @@ def init_db() -> None:
         resume_summary TEXT DEFAULT '',
         pending_at TIMESTAMP,
         onboarding_step VARCHAR(32),
+        resume_score INT DEFAULT 65,
+        readiness_score INT DEFAULT 65,
+        active_focus_area VARCHAR(128) DEFAULT '',
+        skills_summary TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """
@@ -120,6 +124,10 @@ def init_db() -> None:
             ("resume_summary", "TEXT DEFAULT ''"),
             ("pending_at", "TIMESTAMP"),
             ("onboarding_step", "VARCHAR(32)"),
+            ("resume_score", "INT DEFAULT 65"),
+            ("readiness_score", "INT DEFAULT 65"),
+            ("active_focus_area", "VARCHAR(128) DEFAULT ''"),
+            ("skills_summary", "TEXT DEFAULT ''"),
         ]
         if _is_postgres():
             for col, col_def in cols_to_add:
@@ -519,3 +527,88 @@ def weekly_drill_summary(phone: str) -> list[dict[str, Any]]:
             (phone,),
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+def set_resume_analysis(
+    phone: str,
+    resume_score: int,
+    skills_summary: str,
+    resume_summary: str = "",
+) -> None:
+    """Save parsed resume score and skill diagnostics, setting initial readiness baseline."""
+    score = max(10, min(100, int(resume_score or 65)))
+    with get_conn() as conn:
+        conn.execute(
+            _q(
+                "UPDATE users SET resume_score = ?, readiness_score = ?, "
+                "skills_summary = ?, resume_summary = COALESCE(NULLIF(?, ''), resume_summary) "
+                "WHERE phone_number = ?"
+            ),
+            (score, score, str(skills_summary or ""), str(resume_summary or ""), phone),
+        )
+
+
+def set_focus_area(phone: str, focus_area: str) -> None:
+    """Set the active technical gap the user is currently working to fix."""
+    with get_conn() as conn:
+        conn.execute(
+            _q("UPDATE users SET active_focus_area = ? WHERE phone_number = ?"),
+            (str(focus_area or "").strip(), phone),
+        )
+
+
+def update_readiness_score(phone: str, delta: int = 0) -> int:
+    """Recompute or bump the user's composite placement readiness score (0-100)."""
+    user = get_user(phone)
+    if not user:
+        return 65
+
+    base = int(user.get("resume_score") or 65)
+    solved = int(user.get("questions_solved") or 0)
+    correct = int(user.get("correct_count") or 0)
+    streak = int(user.get("streak_count") or 0)
+    curr = int(user.get("readiness_score") or base)
+
+    # Progressive composite formula:
+    # Blend resume baseline with practice accuracy, volume, and consistency
+    if solved > 0:
+        accuracy = (correct / solved) * 100.0
+        practice_weight = min(0.50, (solved / 20.0) * 0.50)
+        resume_weight = 1.0 - practice_weight
+
+        streak_bonus = min(5, streak)
+        volume_bonus = min(10, int((solved / 30.0) * 10))
+
+        computed = int((resume_weight * base) + (practice_weight * accuracy) + streak_bonus + volume_bonus)
+    else:
+        computed = base
+
+    # Apply manual delta nudge from latest drill attempt (+2 for high score, etc.)
+    new_score = max(20, min(99, computed + delta))
+
+    with get_conn() as conn:
+        conn.execute(
+            _q("UPDATE users SET readiness_score = ? WHERE phone_number = ?"),
+            (new_score, phone),
+        )
+    return new_score
+
+
+def get_readiness_profile(phone: str) -> dict[str, Any]:
+    """Fetch complete stats, readiness score, active focus, and target profile."""
+    user = get_user(phone) or {}
+    st = stats(phone)
+    return {
+        "name": user.get("name") or "Candidate",
+        "track": user.get("track") or "General SDE",
+        "resume_score": int(user.get("resume_score") or 65),
+        "readiness_score": int(user.get("readiness_score") or 65),
+        "active_focus_area": user.get("active_focus_area") or "",
+        "target_company": user.get("target_company") or "",
+        "target_role": user.get("target_role") or "",
+        "streak": st.get("streak", 0),
+        "solved": st.get("solved", 0),
+        "correct": st.get("correct", 0),
+        "accuracy": st.get("accuracy", 0.0),
+        "difficulty": user.get("difficulty") or "easy",
+    }

@@ -191,3 +191,22 @@ def test_is_asking_question_or_clarification():
     assert is_asking_question_or_clarification("int ans = 0; for(int i=0; i<n; i++) ans += arr[i];") is False
 
 
+def test_fix_and_readiness_commands():
+    from commands import parse_command, parse_fix_command
+
+    # Readiness aliases
+    assert parse_command("score") == "readiness"
+    assert parse_command("/score") == "readiness"
+    assert parse_command("readiness") == "readiness"
+    assert parse_command("/readiness") == "readiness"
+    assert parse_command("progress") == "readiness"
+    assert parse_command("cmd:readiness") == "readiness"
+
+    # Fix command
+    assert parse_fix_command("fix:Caching & Redis") == "Caching & Redis"
+    assert parse_fix_command("fix:Dynamic Programming") == "Dynamic Programming"
+    assert parse_fix_command("fix dsa") == "dsa"
+    assert parse_fix_command("/fix os") == "os"
+    assert parse_fix_command("random text") is None
+
+

@@ -7,6 +7,7 @@ import traceback
 
 from caspian import Button, Caspian, HandlerContext, Message, Thread
 
+import json
 import os
 import re as _re
 
@@ -17,6 +18,7 @@ from commands import (
     looks_like_answer,
     parse_command,
     parse_company_command,
+    parse_fix_command,
     parse_onboard_company,
     parse_onboard_role,
     parse_onboard_timeline,
@@ -38,7 +40,10 @@ from llm import (
     generate_hint,
     generate_prep_plan,
     generate_question,
+    generate_readiness_report,
     parse_score,
+    render_readiness_bar,
+    score_and_analyze_resume,
     show_solution,
     tutor_reason_and_answer,
 )
@@ -49,8 +54,8 @@ log = logging.getLogger("placementprep.bot")
 # ── Onboarding buttons ─────────────────────────────────────────────
 
 ONBOARDING_BUTTONS = (
-    Button(label="🎯 Pick My Track", data="onboard:manual"),
-    Button(label="🤖 AI Resume Scanner", data="onboard:ai"),
+    Button(label="📄 AI Resume Score", data="onboard:ai"),
+    Button(label="📈 Placement Scorecard", data="cmd:readiness"),
     Button(label="⚡ Instant Mock Drill", data="cmd:drill"),
 )
 
@@ -119,9 +124,16 @@ SWITCH_MOOD_BUTTONS = (
 
 MENU_BUTTONS = (
     Button(label="🎯 3-Question Mock", data="cmd:drill"),
-    Button(label="📊 My Stats", data="cmd:streak"),
-    Button(label="📑 Today's Summary", data="cmd:summary"),
+    Button(label="📈 Placement Scorecard", data="cmd:readiness"),
+    Button(label="📄 Scan Resume", data="onboard:ai"),
     Button(label="🔄 Switch Mood", data="cmd:switch_mood"),
+)
+
+READINESS_BUTTONS = (
+    Button(label="⚡ 3-Question Mock", data="cmd:drill"),
+    Button(label="📄 Scan Resume", data="onboard:ai"),
+    Button(label="📑 Daily Revision", data="cmd:summary"),
+    Button(label="🔄 Switch Topic", data="cmd:switch_mood"),
 )
 
 def build_welcome_message(name: str = "") -> str:
@@ -161,11 +173,13 @@ WELCOME = build_welcome_message()
 HELP = (
     "*PlacementPrep AI Commands*\n"
     "• *menu* — Open the on-demand practice dashboard\n"
+    "• *score* — Real-time placement readiness score & gap analysis\n"
+    "• *fix <topic>* — Drill your chosen weakness gap (e.g. `fix os`, `fix dsa`)\n"
     "• *drill* — Start a 3-question adaptive mock interview\n"
     "• *drill <topic>* — Practice a specific topic (e.g. `drill os`, `drill dsa`, `drill dbms`)\n"
     "• *company <name>* — Target a company (e.g. `company amazon`, `company google`)\n"
     "• *role <name>* — Target your dream role (e.g. `role SDE 1`, `role Backend`)\n"
-    "• *resume: <text>* — Review resume, find vulnerabilities, and get a 7-day roadmap\n"
+    "• *resume: <text>* — Score resume, find vulnerabilities, and get fix options\n"
     "• *summary* — Daily revision cheat sheet of today's solved questions\n"
     "• *streak* — Daily streak, solved count, and accuracy\n"
     "• *topics* — Per-topic performance breakdown\n"
@@ -179,10 +193,11 @@ HELP = (
 FALLBACK_MSG = (
     "I'm your PlacementPrep AI coach! 🎓\n\n"
     "Here is what you can do:\n"
+    "• *score* — View your placement readiness score & diagnostic\n"
     "• *drill* — Start a 3-question adaptive mock interview\n"
     "• *drill <topic>* — Practice a specific topic (e.g. `drill os`, `drill dsa`)\n"
     "• *company <name>* — Target a company (e.g. `company amazon`)\n"
-    "• *resume: <text>* — Review resume and tailor your questions\n"
+    "• *resume: <text>* — Score resume and get 1-click weakness fixes\n"
     "• *summary* — Daily revision cheat sheet\n"
     "• *streak* — View your active daily streak and stats\n\n"
     "Send *drill* to start practicing!"
@@ -317,6 +332,12 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
         _onboard_target_profile(thread, phone, text, user)
         return
 
+    # ── Immediate Weakness Fix Action (1-click from resume audit or scorecard) ──
+    fix_topic = parse_fix_command(text)
+    if fix_topic:
+        _handle_fix_topic(thread, phone, fix_topic, user)
+        return
+
     # ── Onboarding state machine (multi-step AI flow) ──
     onboarding_step = (user or {}).get("onboarding_step")
     if onboarding_step:
@@ -394,24 +415,44 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
     if is_res:
         if not res_content:
             thread.post(
-                "📄 *Resume Analyzer & Prep Tailoring*\n\n"
+                "📄 *AI Resume Scoring & Skill Gap Diagnostic*\n\n"
                 "Send your resume text, skills, or projects like this:\n"
                 "`resume: 3rd year CSE, built fullstack app with React/Node/Redis, skilled in Java, DSA, OS, DBMS.`\n\n"
-                "I will analyze your vulnerabilities, provide a 7-day roadmap, and tailor future drills to your stack!"
+                "I will evaluate your absolute score (0-100), spot interview vulnerabilities ('The Grill List'), "
+                "and provide 1-click weakness repair buttons!"
             )
             return
-        thread.post("🔍 *Analyzing your resume and tailoring interview drills...*")
+        thread.post("🔍 *Running deep resume scoring and interview vulnerability scan...* ⏳")
         try:
             target_role = (user or {}).get("target_role") or "Software Development Engineer"
-            analysis = analyze_resume(res_content, target_role=target_role)
-            db.update_profile(phone, resume_summary=res_content[:500])
-            post_chunks(thread, analysis)
+            analysis = score_and_analyze_resume(res_content, target_role=target_role)
+            score = analysis.get("score", 65)
+            recommended_track = analysis.get("recommended_track") or "Software Development"
+            fix_options = analysis.get("fix_options") or ["DSA", "System Design", "Core CS"]
+            primary_fix = fix_options[0] if fix_options else "DSA"
+
+            db.set_resume_analysis(
+                phone,
+                resume_score=score,
+                skills_summary=json.dumps(analysis),
+                resume_summary=res_content[:1000],
+            )
+            db.set_focus_area(phone, primary_fix)
+            db.upsert_user(phone, track=recommended_track)
+
+            fix_buttons = []
+            for opt in fix_options[:3]:
+                fix_buttons.append(Button(label=f"🛠️ Fix: {opt[:18]}", data=f"fix:{opt}"))
+            fix_buttons.append(Button(label="⚡ 3-Q Mock", data="cmd:drill"))
+
+            post_chunks(thread, analysis["message"], actions=tuple(fix_buttons))
             thread.post(
-                "✅ *Profile saved!* Your mock interview questions will now challenge you on your resume claims.\n\n"
-                "Send *drill* whenever you are ready to test your knowledge!"
+                "✅ *Profile & Diagnostics Saved!*\n\n"
+                "Tap any *[🛠️ Fix: Topic]* button above to target your weakest technical area, "
+                "or send *drill* to start a full mock round."
             )
         except Exception:
-            log.exception("Resume analysis failed")
+            log.exception("Resume deep scoring failed")
             thread.post("Couldn't analyze your resume right now. Please try sending it again.")
         return
 
@@ -473,16 +514,20 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
     if cmd == "leaderboard":
         _show_leaderboard(thread, phone)
         return
+    if cmd == "readiness":
+        _show_readiness_scorecard(thread, phone)
+        return
     if cmd == "summary":
         _show_summary(thread, phone, user)
         return
     # "resume" command without content — show instructions
     if cmd == "resume":
         thread.post(
-            "📄 *Resume Analyzer & Prep Tailoring*\n\n"
+            "📄 *AI Resume Scoring & Skill Gap Diagnostic*\n\n"
             "Send your resume text, skills, or projects like this:\n"
             "`resume: 3rd year CSE, built fullstack app with React/Node/Redis, skilled in Java, DSA, OS, DBMS.`\n\n"
-            "I will analyze your vulnerabilities, provide a 7-day roadmap, and tailor future drills to your stack!"
+            "I will evaluate your absolute score (0-100), spot interview vulnerabilities ('The Grill List'), "
+            "and provide 1-click weakness repair buttons!"
         )
         return
     # "switch" command — already handled above by parse_switch_command,
@@ -593,7 +638,7 @@ def _handle_onboarding(thread: Thread, phone: str, text: str, user: dict | None,
 
 
 def _onboard_resume(thread: Thread, phone: str, text: str) -> None:
-    """Step 1: User pasted resume text → AI extracts skills → ask combined target."""
+    """Flagship Feature: Deep Resume Diagnostic, Absolute Scoring, Skill Gap Analysis & 1-Click Fix Options."""
     # Ignore very short messages (probably accidental)
     if len(text.strip()) < 15:
         thread.post(
@@ -602,44 +647,48 @@ def _onboard_resume(thread: Thread, phone: str, text: str) -> None:
         )
         return
 
-    thread.post("🔍 *Analyzing your profile...*")
+    thread.post("🔍 *Running deep resume scoring and interview vulnerability scan...* ⏳")
 
     try:
-        # Extract skills and save resume
-        analysis = extract_skills_from_resume(text)
-        db.update_profile(phone, resume_summary=text[:500])
+        user = _safe_get_user(phone) or {}
+        target_role = user.get("target_role") or "Software Engineer"
+        analysis = score_and_analyze_resume(text, target_role=target_role)
 
-        # Detect track from AI response and set it
-        analysis_lower = analysis.lower()
-        if "data science" in analysis_lower:
-            db.upsert_user(phone, track="Data Science")
-        elif "core cs" in analysis_lower:
-            db.upsert_user(phone, track="Core CS")
-        else:
-            db.upsert_user(phone, track="Software Development")
+        # Persist score and summary
+        score = analysis.get("score", 65)
+        recommended_track = analysis.get("recommended_track") or "Software Development"
+        fix_options = analysis.get("fix_options") or ["DSA", "System Design", "Core CS"]
+        primary_fix = fix_options[0] if fix_options else "DSA"
 
-        post_chunks(thread, analysis)
+        db.set_resume_analysis(
+            phone,
+            resume_score=score,
+            skills_summary=json.dumps(analysis),
+            resume_summary=text[:1000],
+        )
+        db.set_focus_area(phone, primary_fix)
+        db.upsert_user(phone, track=recommended_track)
+
+        # Format 1-click fix buttons directly from the AI's diagnostic!
+        fix_buttons = []
+        for opt in fix_options[:3]:
+            fix_buttons.append(Button(label=f"🛠️ Fix: {opt[:18]}", data=f"fix:{opt}"))
+        fix_buttons.append(Button(label="🎯 Pick Target Pack", data="tp:general"))
+
+        # Deliver the flagship audit card with the fix buttons
+        post_chunks(thread, analysis["message"], actions=tuple(fix_buttons))
 
         # Move to combined single-step target selection (saves turns and tokens!)
         db.set_onboarding_step(phone, "awaiting_target_profile")
         thread.post(
-            "🎯 *LOCK YOUR TARGET CAREER GOAL*\n"
+            "🎯 *NEXT STEP: PICK WHICH WEAKNESS TO REPAIR FIRST*\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
-            "Choose a target pack below to configure your company questions, role focus, "
-            "and timeline together in *1 click*:\n\n"
-            "• *Tier-1 / FAANG* — Google, Amazon, Meta (SDE • 1–3 mos)\n"
-            "• *Amazon / Backend* — Distributed systems & DSA (1–3 mos)\n"
-            "• *Microsoft / Fullstack* — Web systems & Algorithms (1–3 mos)\n"
-            "• *TCS / Mass Recruiters* — Aptitude, Core CS & Coding (This Month)\n"
-            "• *Data Science & AI* — Python, ML, SQL (1–3 mos)\n"
-            "• *Core CS* — Operating Systems, DBMS & Networks (1–3 mos)\n"
-            "• *General SDE* — Universal coding drills (Immediate)\n\n"
-            "💬 _Or send your custom target in one line:_\n"
-            "`Company, Role, Timeline` (e.g. `Google, SDE, 2 months`)",
+            "Tap any *[🛠️ Fix: Topic]* button above to immediately begin targeted interview drills on that weakness.\n\n"
+            "Or pick a target company pack below to calibrate your mock bar:",
             actions=TARGET_PROFILE_BUTTONS,
         )
     except Exception:
-        log.exception("Resume skill extraction failed for %s", phone)
+        log.exception("Resume deep scoring failed for %s", phone)
         thread.post(
             "⚠️ Couldn't analyze that right now. Please try pasting your resume again!"
         )
@@ -889,12 +938,56 @@ def _open_tutoring(thread: Thread, phone: str, text: str, user: dict | None) -> 
 
 # ── Drill lifecycle ────────────────────────────────────────────────
 
+def _handle_fix_topic(thread: Thread, phone: str, topic: str, user: dict | None) -> None:
+    """1-Click Weakness Fix: Locks focus area, updates profile, launches adaptive drill."""
+    clean_topic = topic.strip()
+    if clean_topic.lower() == "active":
+        user = user or db.get_user(phone) or {}
+        clean_topic = user.get("active_focus_area") or "DSA"
+
+    try:
+        db.set_focus_area(phone, clean_topic)
+        db.clear_pending(phone)
+        db.set_onboarding_step(phone, None)
+    except Exception:
+        log.exception("Failed to set focus area for %s", phone)
+
+    thread.post(
+        f"🛠️ *Priority Weakness Targeted: {clean_topic.upper()}*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "I've calibrated your placement profile to target this specific vulnerability.\n"
+        "Launching an adaptive diagnostic question to test your depth...\n\n"
+        "_Reply with your technical explanation, architecture, or code._"
+    )
+    _start_drill(thread, phone, topic=clean_topic)
+
+
+def _show_readiness_scorecard(thread: Thread, phone: str) -> None:
+    """Display real-time placement readiness score, ASCII gauge, and action options."""
+    profile = db.get_readiness_profile(phone)
+    report = generate_readiness_report(profile)
+
+    actions = []
+    active_focus = profile.get("active_focus_area")
+    if active_focus:
+        actions.append(Button(label=f"🛠️ Fix: {active_focus[:16]}", data=f"fix:{active_focus}"))
+    actions.extend([
+        Button(label="⚡ 3-Q Mock Drill", data="cmd:drill"),
+        Button(label="📄 Scan Resume", data="onboard:ai"),
+        Button(label="📑 Daily Revision", data="cmd:summary"),
+    ])
+
+    post_chunks(thread, report, actions=tuple(actions[:4]))
+
+
 def _start_drill(thread: Thread, phone: str, topic: str | None = None) -> None:
     user = _safe_get_user(phone) or db.upsert_user(phone)
     track = user.get("track") or "General SDE"
     difficulty = user.get("difficulty") or "easy"
     target_company = user.get("target_company") or ""
     resume_summary = user.get("resume_summary") or ""
+    if not topic and user.get("active_focus_area"):
+        topic = user.get("active_focus_area")
     try:
         if target_company:
             question, chosen_topic = generate_company_question(
@@ -940,6 +1033,14 @@ def _grade(thread: Thread, phone: str, question: str, answer: str, user: dict | 
     except Exception:
         log.exception("Failed to record attempt for %s", phone)
 
+    # Dynamic placement readiness score bump
+    try:
+        delta = 2 if score >= 8 else (1 if score >= 5 else 0)
+        new_readiness = db.update_readiness_score(phone, delta)
+    except Exception:
+        log.exception("Readiness score bump failed for %s", phone)
+        new_readiness = int((user or {}).get("readiness_score") or 65)
+
     remaining = int(user.get("drill_remaining") or 0)
     post_chunks(thread, feedback)
 
@@ -980,9 +1081,21 @@ def _grade(thread: Thread, phone: str, question: str, answer: str, user: dict | 
         db.set_pending(phone, None, None, drill_remaining=0)
     except Exception:
         log.exception("Failed to clear pending after drill completion")
+
+    readiness_bar = render_readiness_bar(new_readiness)
+    active_focus = (user or {}).get("active_focus_area") or topic
     thread.post(
-        "🔥 Session complete! Send *drill* for another round, "
-        "*summary* for today's cheat sheet, or *streak* for stats."
+        f"🔥 *Mock Session Complete!*\n\n"
+        f"📈 *Placement Readiness:* {readiness_bar}\n"
+        f"• Last Question Score: *{score}/10*\n"
+        f"• Active Focus Area: *{active_focus}*\n\n"
+        "Tap *Placement Scorecard* for your full diagnostic, or *3-Question Mock* to keep climbing!",
+        actions=(
+            Button(label="📈 Placement Scorecard", data="cmd:readiness"),
+            Button(label=f"🛠️ Fix: {active_focus[:16]}", data=f"fix:{active_focus}"),
+            Button(label="⚡ 3-Question Mock", data="cmd:drill"),
+            Button(label="📑 Daily Revision", data="cmd:summary"),
+        ),
     )
 
 
@@ -1145,14 +1258,19 @@ def _streak_card(phone: str) -> str:
         s = db.stats(phone)
         user = _safe_get_user(phone) or {}
         difficulty = (user.get("difficulty") or "easy").capitalize()
+        readiness = int(user.get("readiness_score") or 65)
+        bar = render_readiness_bar(readiness)
+        focus = user.get("active_focus_area") or "DSA"
         return (
-            "\U0001f4ca *Your PlacementPrep stats*\n\n"
-            f"\U0001f525 Streak: *{s['streak']}* day(s)\n"
-            f"\u2705 Questions solved: *{s['solved']}*\n"
-            f"\U0001f3af Accuracy (score \u2265 7): *{s['accuracy']}%*\n"
-            f"\U0001f3af Track: *{s['track']}*\n"
-            f"\U0001f4aa Level: *{difficulty}*\n\n"
-            "Keep the chain alive \u2014 morning capsule drops at 8:00 AM."
+            "📊 *Your PlacementPrep Performance Profile*\n\n"
+            f"📈 Placement Readiness: *{bar}*\n"
+            f"🎯 Active Focus Area: *{focus}*\n"
+            f"🔥 Streak: *{s['streak']}* day(s)\n"
+            f"✅ Questions solved: *{s['solved']}*\n"
+            f"🎯 Accuracy (score ≥ 7): *{s['accuracy']}%*\n"
+            f"📚 Track: *{s['track']}*\n"
+            f"💪 Level: *{difficulty}*\n\n"
+            "Keep the chain alive — morning capsule drops at 8:00 AM."
         )
     except Exception:
         log.exception("Streak card generation failed")

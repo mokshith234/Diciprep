@@ -80,6 +80,17 @@ COMMAND_ALIASES = {
     "?": "help",
     "what": "help",
     "what?": "help",
+    # Readiness scorecard & progress
+    "score": "readiness",
+    "/score": "readiness",
+    "readiness": "readiness",
+    "/readiness": "readiness",
+    "progress": "readiness",
+    "/progress": "readiness",
+    "report": "readiness",
+    "/report": "readiness",
+    "cmd:readiness": "readiness",
+    "cmd:score": "readiness",
 }
 
 
@@ -127,6 +138,22 @@ def parse_topic_drill(text: str) -> str | None:
     }
     if norm in COMMON_TOPICS:
         return COMMON_TOPICS[norm]
+    return None
+
+
+def parse_fix_command(text: str) -> str | None:
+    """Matches 'fix:<topic>', 'cmd:fix:<topic>', 'fix <topic>', '/fix <topic>' for weakness repair buttons."""
+    norm = normalize(text)
+    lower = norm.lower()
+    if lower.startswith("cmd:fix:"):
+        topic = norm[8:].strip()
+        return topic if topic else None
+    if lower.startswith("fix:"):
+        topic = norm[4:].strip()
+        return topic if topic else None
+    m = re.match(r"^(?:/?fix|cmd:fix)\s+([a-zA-Z0-9_\-\s&/]+)$", norm, re.I)
+    if m:
+        return m.group(1).strip()
     return None
 
 
@@ -273,11 +300,11 @@ def parse_track_payload(text: str) -> str | None:
     if key in TRACKS:
         return TRACKS[key]
     lowered = key.lower()
-    if "data science" in lowered:
+    if re.search(r"\bdata\s+science\b", lowered):
         return "Data Science"
-    if "core" in lowered:
+    if re.search(r"\bcore\b", lowered):
         return "Core CS"
-    if "sde" in lowered or "software" in lowered:
+    if re.search(r"\b(?:sde|software)\b", lowered):
         return "Software Development"
     return None
 
