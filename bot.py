@@ -561,19 +561,52 @@ def _streak_card(phone: str) -> str:
 
 # ── Helpers ────────────────────────────────────────────────────────
 
+def _parse_sender(msg: Message) -> tuple[str, str]:
+    sender = getattr(msg, "sender", None)
+    addr, name = "", ""
+    if isinstance(sender, dict):
+        addr = str(sender.get("address") or "")
+        name = str(sender.get("name") or "")
+    elif sender:
+        s = str(sender).strip()
+        if s.startswith("{") and "address" in s:
+            import ast
+            try:
+                d = ast.literal_eval(s)
+                if isinstance(d, dict):
+                    addr = str(d.get("address") or "")
+                    name = str(d.get("name") or "")
+            except Exception:
+                pass
+            if not addr:
+                import re
+                m_addr = re.search(r"['\"]address['\"]\s*:\s*['\"]([^'\"]+)['\"]", s)
+                m_name = re.search(r"['\"]name['\"]\s*:\s*['\"]([^'\"]+)['\"]", s)
+                addr = m_addr.group(1) if m_addr else s
+                name = m_name.group(1) if m_name else ""
+        else:
+            addr = s
+
+    if not addr:
+        tid = str(getattr(msg, "thread_id", "") or "")
+        addr = tid.split(":", 1)[-1]
+
+    if not name:
+        raw = getattr(msg, "raw", None)
+        if isinstance(raw, dict):
+            contacts = raw.get("contacts") or []
+            if contacts and isinstance(contacts[0], dict):
+                profile = contacts[0].get("profile") or {}
+                name = str(profile.get("name") or "")
+
+    return addr, name
+
+
 def _phone(msg: Message) -> str:
-    sender = getattr(msg, "sender", "") or ""
-    if sender:
-        return str(sender)
-    tid = str(getattr(msg, "thread_id", "") or "")
-    return tid.split(":", 1)[-1]
+    addr, _ = _parse_sender(msg)
+    return addr
 
 
 def _name(msg: Message) -> str:
-    raw = getattr(msg, "raw", None)
-    if isinstance(raw, dict):
-        contacts = raw.get("contacts") or []
-        if contacts and isinstance(contacts[0], dict):
-            profile = contacts[0].get("profile") or {}
-            return str(profile.get("name") or "")
-    return ""
+    _, name = _parse_sender(msg)
+    return name

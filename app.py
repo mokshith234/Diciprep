@@ -138,9 +138,24 @@ async def lifespan(_app: FastAPI):
 
     def _caspian_poller():
         log.info("Starting Caspian hosted message listener")
+        from caspian.hosted.inbound import GatewayPoller
+        poller = GatewayPoller(cx._gateway_client)
         while not stop_caspian.is_set():
             try:
-                cx.run(max_iterations=10, interval=1.0)
+                fetched = poller.fetch_raw()
+                if fetched.is_ok:
+                    raw = fetched.value
+                    if raw.body:
+                        import json
+                        try:
+                            data = json.loads(raw.body)
+                            events = data.get("events") or []
+                            if events:
+                                cx.handle("gateway", raw.body, raw.headers)
+                        except Exception:
+                            cx.handle("gateway", raw.body, raw.headers)
+                import time
+                time.sleep(1.0)
             except Exception as exc:
                 log.warning("Caspian listener warning: %s", exc)
                 import time

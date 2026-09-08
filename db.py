@@ -55,7 +55,7 @@ def _q(sql: str) -> str:
 def init_db() -> None:
     users_sql = """
     CREATE TABLE IF NOT EXISTS users (
-        phone_number VARCHAR(32) PRIMARY KEY,
+        phone_number VARCHAR(128) PRIMARY KEY,
         name VARCHAR(128),
         track VARCHAR(64) DEFAULT 'General SDE',
         streak_count INT DEFAULT 0,
@@ -79,7 +79,7 @@ def init_db() -> None:
     drills_sql = """
     CREATE TABLE IF NOT EXISTS drills (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        phone_number VARCHAR(32) REFERENCES users(phone_number),
+        phone_number VARCHAR(128) REFERENCES users(phone_number),
         topic VARCHAR(64),
         question_text TEXT,
         user_response TEXT,
@@ -92,7 +92,7 @@ def init_db() -> None:
         drills_sql = """
         CREATE TABLE IF NOT EXISTS drills (
             id SERIAL PRIMARY KEY,
-            phone_number VARCHAR(32) REFERENCES users(phone_number),
+            phone_number VARCHAR(128) REFERENCES users(phone_number),
             topic VARCHAR(64),
             question_text TEXT,
             user_response TEXT,
