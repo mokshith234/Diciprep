@@ -67,7 +67,7 @@ def send_telegram(chat_id: str, text: str, actions=None) -> None:
         for btn in actions:
             label = getattr(btn, "label", str(btn))
             data = getattr(btn, "data", label)
-            keyboard.append([{"text": label, "callback_data": str(data)}])
+            keyboard.append([{"text": str(label)[:64], "callback_data": str(data)[:64]}])
         reply_markup = {"inline_keyboard": keyboard}
 
     parts = chunk_text(text)
@@ -112,6 +112,17 @@ def answer_telegram_callback(callback_id: str) -> None:
 
 
 def post_chunks(thread, text: str, actions=None) -> None:
+    tid = str(getattr(thread, "thread_id", ""))
+    if tid.startswith("telegram:") and actions:
+        chat_id = tid.split(":", 1)[-1]
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+        if token and chat_id:
+            try:
+                send_telegram(chat_id, text, actions=actions)
+                return
+            except Exception:
+                pass
+
     parts = chunk_text(text)
     for i, part in enumerate(parts):
         if i == len(parts) - 1 and actions:

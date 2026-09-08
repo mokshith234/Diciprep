@@ -251,14 +251,28 @@ def register(cx: Caspian) -> None:
         handle_text(thread, msg, text)
 
 
-# Map Thread.post to Thread.send across the Caspian SDK.
-# In Caspian hosted mode, Thread.post sets standalone=False, converting outbound
-# into Reply(reply_to=mid). The Caspian hosted server caps /v1/messages/{mid}/reply
-# at ~50 replies per 24 hours to prevent bot loops.
-# Thread.send sets standalone=True, which routes via /v1/conversations/{cid}/messages.
-# This ensures 100% of messages and buttons are tracked and processed by Caspian Gateway
-# for the hackathon without hitting the conversation reply cap.
-Thread.post = Thread.send
+# Map Thread.post and Thread.send across Caspian SDK:
+# 1. Thread.send sets standalone=True, routing via /v1/conversations/{cid}/messages for full Caspian hackathon tracking.
+# 2. For Telegram with actions (buttons), Caspian Hosted Gateway drops inline buttons on its backend.
+#    We dispatch directly to Telegram Bot API with reply_markup so buttons render natively!
+_caspian_thread_send = Thread.send
+
+def _unified_thread_post(self: Thread, text: str, *, actions: tuple[Any, ...] = ()) -> None:
+    tid = str(getattr(self, "thread_id", ""))
+    if tid.startswith("telegram:") and actions:
+        chat_id = tid.split(":", 1)[-1]
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+        if token and chat_id:
+            try:
+                from outbound import send_telegram
+                send_telegram(chat_id, text, actions=actions)
+                return
+            except Exception:
+                log.exception("send_telegram with actions failed for %s", chat_id)
+    _caspian_thread_send(self, text, actions=actions)
+
+Thread.post = _unified_thread_post
+Thread.send = _unified_thread_post
 
 
 def handle_text(thread: Thread, msg: Message, text: str) -> None:
