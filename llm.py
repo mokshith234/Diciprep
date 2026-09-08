@@ -334,3 +334,66 @@ def generate_daily_summary(drills: list[dict], user_profile: dict) -> str:
         "Keep it concise, high-yield, and formatted in clean WhatsApp/Telegram markdown (single asterisks *bold*, NO LaTeX math)."
     )
     return generate(prompt)
+
+
+def extract_skills_from_resume(resume_text: str) -> str:
+    """Extract skills, strengths, and gaps from pasted resume text.
+
+    Returns a conversational analysis to show the user what AI detected,
+    formatted for messaging apps.
+    """
+    prompt = (
+        "You are an expert campus placement coach analyzing a student's resume/skills.\n\n"
+        f"Resume / Skills / Projects:\n{resume_text}\n\n"
+        "Respond with EXACTLY this structure (messaging-friendly markdown, single asterisks *bold*):\n\n"
+        "🔍 *Here's what I found in your profile:*\n\n"
+        "💪 *Your Strengths:*\n"
+        "• (list 3-4 key skills/technologies detected)\n\n"
+        "⚠️ *Potential Weak Areas:*\n"
+        "• (list 2-3 gaps or areas that need prep based on what's missing)\n\n"
+        "🎯 *Recommended Track:* (pick: Software Development / Data Science / Core CS)\n\n"
+        "📊 *Difficulty:* (easy / medium / hard based on experience level)\n\n"
+        "Keep it under 150 words. Be specific about detected tech stack. "
+        "Do NOT use LaTeX math. Use single asterisks for bold."
+    )
+    return generate(prompt)
+
+
+def generate_prep_plan(
+    resume_text: str,
+    company: str,
+    role: str,
+    timeline: str,
+) -> str:
+    """Generate a personalized, actionable prep plan from gathered onboarding info.
+
+    Returns the plan + a recommended first drill topic.
+    """
+    prompt = (
+        "You are an elite campus placement strategist creating a hyper-personalized prep plan.\n\n"
+        f"*Student Profile:*\n"
+        f"• Resume/Skills: {resume_text[:600]}\n"
+        f"• Target Company: {company}\n"
+        f"• Target Role: {role}\n"
+        f"• Timeline: {timeline}\n\n"
+        "Create a sharp, actionable placement prep plan in this EXACT structure:\n\n"
+        "🚀 *Your Personalized Prep Plan*\n\n"
+        f"🏢 *Target:* {role} at {company}\n"
+        f"⏰ *Timeline:* {timeline}\n\n"
+        "📋 *Week-by-Week Roadmap:*\n"
+        "• Week 1: (focus area + specific actions)\n"
+        "• Week 2: (focus area + specific actions)\n"
+        "• Week 3: (focus area + specific actions)\n"
+        "• Week 4: (focus area + specific actions)\n\n"
+        "🎯 *Daily Prep Routine:*\n"
+        "• Morning: (what to do)\n"
+        "• Evening: (what to do)\n\n"
+        "⚡ *Start Now:*\n"
+        "Your weakest area based on resume analysis is: (topic). "
+        "I'll start your first drill on this right away!\n\n"
+        "CRITICAL: On the VERY LAST LINE of your response, write EXACTLY:\n"
+        "FIRST_DRILL_TOPIC: <topic>\n"
+        "where <topic> is one of: DSA, DBMS, OS, CN, OOP, SQL, aptitude\n\n"
+        "Rules: messaging-friendly markdown, single asterisks *bold*, NO LaTeX. Under 300 words."
+    )
+    return generate(prompt)

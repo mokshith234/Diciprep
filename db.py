@@ -76,6 +76,7 @@ def init_db() -> None:
         target_role VARCHAR(128) DEFAULT '',
         resume_summary TEXT DEFAULT '',
         pending_at TIMESTAMP,
+        onboarding_step VARCHAR(32),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """
@@ -118,6 +119,7 @@ def init_db() -> None:
             ("target_role", "VARCHAR(128) DEFAULT ''"),
             ("resume_summary", "TEXT DEFAULT ''"),
             ("pending_at", "TIMESTAMP"),
+            ("onboarding_step", "VARCHAR(32)"),
         ]
         if _is_postgres():
             for col, col_def in cols_to_add:
@@ -198,7 +200,7 @@ def force_clear_all_state(phone: str) -> None:
 
     Use when a user is stuck due to corrupted DB state.
     Preserves: name, track, stats, drills history.
-    Clears: pending question, hints, drill counter, pending_at.
+    Clears: pending question, hints, drill counter, pending_at, onboarding.
     """
     with get_conn() as conn:
         conn.execute(
@@ -208,12 +210,39 @@ def force_clear_all_state(phone: str) -> None:
                 "pending_topic = NULL, "
                 "drill_remaining = 0, "
                 "hint_count = 0, "
-                "pending_at = NULL "
+                "pending_at = NULL, "
+                "onboarding_step = NULL "
                 "WHERE phone_number = ?"
             ),
             (phone,),
         )
     log.info("Force-cleared all session state for phone=%s", phone)
+
+
+def set_onboarding_step(phone: str, step: str | None) -> None:
+    """Set the onboarding step for multi-step AI-guided onboarding."""
+    with get_conn() as conn:
+        conn.execute(
+            _q("UPDATE users SET onboarding_step = ? WHERE phone_number = ?"),
+            (step, phone),
+        )
+
+
+def get_onboarding_step(phone: str) -> str | None:
+    """Get the current onboarding step for a user."""
+    user = get_user(phone)
+    if not user:
+        return None
+    return user.get("onboarding_step")
+
+
+def complete_onboarding(phone: str) -> None:
+    """Mark onboarding as complete — clear step, user is in normal mode."""
+    with get_conn() as conn:
+        conn.execute(
+            _q("UPDATE users SET onboarding_step = NULL WHERE phone_number = ?"),
+            (phone,),
+        )
 
 
 def get_pending_age_seconds(user: dict[str, Any] | None) -> float | None:

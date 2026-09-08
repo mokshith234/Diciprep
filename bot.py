@@ -7,12 +7,18 @@ import traceback
 
 from caspian import Button, Caspian, HandlerContext, Message, Thread
 
+import re as _re
+
 import db
 from commands import (
     is_followup,
     looks_like_answer,
     parse_command,
     parse_company_command,
+    parse_onboard_company,
+    parse_onboard_role,
+    parse_onboard_timeline,
+    parse_onboarding_payload,
     parse_resume_command,
     parse_role_command,
     parse_switch_command,
@@ -23,9 +29,11 @@ from llm import (
     analyze_resume,
     evaluate_answer,
     explain_followup,
+    extract_skills_from_resume,
     generate_company_question,
     generate_daily_summary,
     generate_hint,
+    generate_prep_plan,
     generate_question,
     parse_score,
     show_solution,
@@ -34,10 +42,42 @@ from outbound import post_chunks
 
 log = logging.getLogger("placementprep.bot")
 
+# ── Onboarding buttons ─────────────────────────────────────────────
+
+ONBOARDING_BUTTONS = (
+    Button(label="🎯 I'll Pick My Prep", data="onboard:manual"),
+    Button(label="🤖 AI Reads My Resume", data="onboard:ai"),
+)
+
 TRACK_BUTTONS = (
     Button(label="SDE Track", data="track:sde"),
     Button(label="Data Science", data="track:ds"),
     Button(label="Core CS", data="track:core"),
+)
+
+COMPANY_BUTTONS = (
+    Button(label="🔍 Google", data="obc:google"),
+    Button(label="📦 Amazon", data="obc:amazon"),
+    Button(label="🪟 Microsoft", data="obc:microsoft"),
+    Button(label="🏢 TCS", data="obc:tcs"),
+    Button(label="💼 Infosys", data="obc:infosys"),
+    Button(label="🎯 Other / Skip", data="obc:any"),
+)
+
+ROLE_BUTTONS = (
+    Button(label="💻 SDE / Backend", data="obr:SDE"),
+    Button(label="🌐 Frontend / Fullstack", data="obr:Frontend"),
+    Button(label="📊 Data Scientist", data="obr:Data Scientist"),
+    Button(label="⚙️ DevOps / Cloud", data="obr:DevOps"),
+    Button(label="🔐 Security / Core", data="obr:Core Engineer"),
+    Button(label="🎯 Other / Skip", data="obr:Software Engineer"),
+)
+
+TIMELINE_BUTTONS = (
+    Button(label="🔥 This Month", data="obt:This Month"),
+    Button(label="📅 1–3 Months", data="obt:1-3 Months"),
+    Button(label="📆 3–6 Months", data="obt:3-6 Months"),
+    Button(label="🗓️ Next Year", data="obt:Next Year"),
 )
 
 DRILL_BUTTONS = (
@@ -70,10 +110,12 @@ MENU_BUTTONS = (
 )
 
 WELCOME = (
-    "🚀 *Welcome to PlacementPrep AI*\n\n"
-    "Daily capsules, adaptive mocks, instant code reviews, and resume analysis — "
-    "right here on WhatsApp & Telegram.\n\n"
-    "Pick your target track:"
+    "🚀 *Welcome to PlacementPrep AI!*\n\n"
+    "Your personal campus placement coach — adaptive mocks, instant code reviews, "
+    "resume analysis & daily capsules.\n\n"
+    "*How would you like to start?*\n\n"
+    "🎯 *Pick My Prep* — Choose your own track & topics\n"
+    "🤖 *AI Reads My Resume* — Paste your resume and I'll build a personalized plan\n"
 )
 
 HELP = (
@@ -165,6 +207,35 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
         # Continue anyway — user might exist already
 
     user = _safe_get_user(phone)
+
+    # ── Onboarding path selection (button payloads) ──
+    onboard_choice = parse_onboarding_payload(text)
+    if onboard_choice == "manual":
+        db.set_onboarding_step(phone, None)
+        thread.post(
+            "🎯 *Great! Let's set up your prep track.*\n\n"
+            "Pick your target track below:",
+            actions=TRACK_BUTTONS,
+        )
+        return
+    if onboard_choice == "ai":
+        db.set_onboarding_step(phone, "awaiting_resume")
+        thread.post(
+            "🤖 *AI-Powered Prep Setup*\n\n"
+            "Paste your resume, skills, or project descriptions below.\n\n"
+            "_Example:_\n"
+            "`3rd year CSE, built fullstack app with React/Node, "
+            "skilled in Java, Python, DSA, OS, DBMS. "
+            "Interned at XYZ Corp on backend microservices.`\n\n"
+            "📋 *Just paste your text and I'll extract everything!*"
+        )
+        return
+
+    # ── Onboarding state machine (multi-step AI flow) ──
+    onboarding_step = (user or {}).get("onboarding_step")
+    if onboarding_step:
+        _handle_onboarding(thread, phone, text, user, onboarding_step)
+        return
 
     # --- Track selection ---
     track_choice = parse_track_payload(text)
@@ -264,7 +335,7 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
             _prompt_stale_question(thread, user, pending, age_seconds)
             return
         db.clear_pending(phone)
-        thread.post(WELCOME, actions=TRACK_BUTTONS)
+        thread.post(WELCOME, actions=ONBOARDING_BUTTONS)
         return
     if cmd == "menu":
         thread.post(
@@ -371,6 +442,202 @@ def _safe_get_user(phone: str) -> dict | None:
     except Exception:
         log.exception("Failed to get_user for phone=%s", phone)
         return None
+
+
+# ── Onboarding state machine ──────────────────────────────────────
+
+def _handle_onboarding(thread: Thread, phone: str, text: str, user: dict | None, step: str) -> None:
+    """Multi-step AI-guided onboarding flow.
+
+    Steps: awaiting_resume → awaiting_company → awaiting_role → awaiting_timeline → done
+    """
+    # Allow explicit commands to break out of onboarding
+    cmd = parse_command(text)
+    if cmd in ("start", "clear", "switch", "help", "drill"):
+        db.set_onboarding_step(phone, None)
+        if cmd == "start":
+            thread.post(WELCOME, actions=ONBOARDING_BUTTONS)
+        elif cmd == "clear":
+            db.force_clear_all_state(phone)
+            thread.post(
+                "🧹 *Session cleared!* Starting fresh.",
+                actions=ONBOARDING_BUTTONS,
+            )
+        elif cmd == "help":
+            thread.post(HELP)
+        elif cmd == "drill":
+            _start_drill(thread, phone)
+        elif cmd == "switch":
+            thread.post(
+                "🔄 *Switched!* Pick what to prep:",
+                actions=SWITCH_MOOD_BUTTONS,
+            )
+        return
+
+    if step == "awaiting_resume":
+        _onboard_resume(thread, phone, text)
+    elif step == "awaiting_company":
+        _onboard_company(thread, phone, text, user)
+    elif step == "awaiting_role":
+        _onboard_role(thread, phone, text, user)
+    elif step == "awaiting_timeline":
+        _onboard_timeline(thread, phone, text, user)
+    else:
+        # Unknown step — reset
+        db.set_onboarding_step(phone, None)
+        thread.post(WELCOME, actions=ONBOARDING_BUTTONS)
+
+
+def _onboard_resume(thread: Thread, phone: str, text: str) -> None:
+    """Step 1: User pasted resume text → AI extracts skills → ask company."""
+    # Ignore very short messages (probably accidental)
+    if len(text.strip()) < 15:
+        thread.post(
+            "📝 That seems too short! Please paste your full resume, skills list, "
+            "or project descriptions so I can analyze them properly."
+        )
+        return
+
+    thread.post("🔍 *Analyzing your profile...*")
+
+    try:
+        # Extract skills and save resume
+        analysis = extract_skills_from_resume(text)
+        db.update_profile(phone, resume_summary=text[:500])
+
+        # Detect track from AI response and set it
+        analysis_lower = analysis.lower()
+        if "data science" in analysis_lower:
+            db.upsert_user(phone, track="Data Science")
+        elif "core cs" in analysis_lower:
+            db.upsert_user(phone, track="Core CS")
+        else:
+            db.upsert_user(phone, track="Software Development")
+
+        post_chunks(thread, analysis)
+
+        # Move to next step
+        db.set_onboarding_step(phone, "awaiting_company")
+        thread.post(
+            "\n🏢 *Which company are you targeting?*\n\n"
+            "Tap a button or type any company name:",
+            actions=COMPANY_BUTTONS,
+        )
+    except Exception:
+        log.exception("Resume skill extraction failed for %s", phone)
+        thread.post(
+            "⚠️ Couldn't analyze that right now. Please try pasting your resume again!"
+        )
+
+
+def _onboard_company(thread: Thread, phone: str, text: str, user: dict | None) -> None:
+    """Step 2: User selected company → save → ask role."""
+    # Check button payload first
+    company = parse_onboard_company(text)
+    if not company:
+        # User typed free text — use it as company name
+        company = text.strip()
+
+    if company.lower() == "any":
+        company = "General (No Specific Company)"
+
+    try:
+        db.update_profile(phone, target_company=company)
+    except Exception:
+        log.exception("Failed to save target company for %s", phone)
+
+    db.set_onboarding_step(phone, "awaiting_role")
+    thread.post(
+        f"✅ *Target company:* {company.capitalize()}\n\n"
+        "💼 *What role are you targeting?*\n\n"
+        "Tap a button or type your target role:",
+        actions=ROLE_BUTTONS,
+    )
+
+
+def _onboard_role(thread: Thread, phone: str, text: str, user: dict | None) -> None:
+    """Step 3: User selected role → save → ask timeline."""
+    # Check button payload first
+    role = parse_onboard_role(text)
+    if not role:
+        role = text.strip()
+
+    try:
+        db.update_profile(phone, target_role=role)
+    except Exception:
+        log.exception("Failed to save target role for %s", phone)
+
+    db.set_onboarding_step(phone, "awaiting_timeline")
+    thread.post(
+        f"✅ *Target role:* {role}\n\n"
+        "📅 *When is your placement season?*\n\n"
+        "This helps me calibrate the intensity of your prep plan:",
+        actions=TIMELINE_BUTTONS,
+    )
+
+
+def _onboard_timeline(thread: Thread, phone: str, text: str, user: dict | None) -> None:
+    """Step 4: User selected timeline → generate full prep plan → start first drill."""
+    # Check button payload first
+    timeline = parse_onboard_timeline(text)
+    if not timeline:
+        timeline = text.strip()
+
+    user = _safe_get_user(phone) or {}
+    resume = user.get("resume_summary") or "General engineering student"
+    company = user.get("target_company") or "General"
+    role = user.get("target_role") or "Software Engineer"
+
+    thread.post("⚡ *Generating your personalized prep plan...*")
+
+    try:
+        plan = generate_prep_plan(resume, company, role, timeline)
+
+        # Extract the recommended first drill topic from the plan
+        first_topic = _extract_first_drill_topic(plan)
+
+        # Clean the FIRST_DRILL_TOPIC line from the displayed plan
+        clean_plan = _re.sub(r'\n?FIRST_DRILL_TOPIC:.*$', '', plan, flags=_re.MULTILINE).strip()
+
+        post_chunks(thread, clean_plan)
+
+        # Complete onboarding
+        db.complete_onboarding(phone)
+
+        # Auto-set difficulty based on timeline
+        if "this month" in timeline.lower():
+            db.update_difficulty(phone, 7)  # Push to medium
+        elif "next year" in timeline.lower():
+            pass  # Keep easy
+
+        thread.post(
+            "✅ *Setup complete!* Your prep is fully personalized.\n\n"
+            f"🎯 Starting your first drill on *{first_topic}* based on your weakest area...\n\n"
+            "_You can always send *switch* to change topics, or *hi* to restart setup._",
+        )
+
+        # Auto-start first drill on the identified weak topic
+        _start_drill(thread, phone, topic=first_topic)
+
+    except Exception:
+        log.exception("Prep plan generation failed for %s", phone)
+        db.complete_onboarding(phone)
+        thread.post(
+            "⚠️ Couldn't generate the full plan right now, but your profile is saved!\n\n"
+            "Send *drill* to start practicing — your drills will be personalized!",
+            actions=MENU_BUTTONS,
+        )
+
+
+def _extract_first_drill_topic(plan_text: str) -> str:
+    """Extract FIRST_DRILL_TOPIC from the AI-generated plan text."""
+    match = _re.search(r'FIRST_DRILL_TOPIC:\s*(\S+)', plan_text, _re.IGNORECASE)
+    if match:
+        topic = match.group(1).strip().upper()
+        valid_topics = {"DSA", "DBMS", "OS", "CN", "OOP", "SQL", "APTITUDE"}
+        if topic in valid_topics:
+            return topic.lower()
+    return "dsa"  # Safe default
 
 
 def _prompt_stale_question(thread: Thread, user: dict | None, pending_q: str, age_sec: float | None) -> None:

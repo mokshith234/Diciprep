@@ -223,3 +223,40 @@ def parse_track_payload(text: str) -> str | None:
     if "sde" in lowered or "software" in lowered:
         return "Software Development"
     return None
+
+
+# ── Onboarding payload parsers ─────────────────────────────────────
+
+def parse_onboarding_payload(text: str) -> str | None:
+    """Parse onboarding button payloads like 'onboard:manual', 'onboard:ai'."""
+    norm = normalize(text).lower()
+    if norm == "onboard:manual":
+        return "manual"
+    if norm == "onboard:ai":
+        return "ai"
+    return None
+
+
+def parse_onboard_company(text: str) -> str | None:
+    """Parse company selection during onboarding: 'obc:<name>' or free text."""
+    norm = normalize(text)
+    if norm.lower().startswith("obc:"):
+        return norm[4:].strip()
+    return None
+
+
+def parse_onboard_role(text: str) -> str | None:
+    """Parse role selection during onboarding: 'obr:<name>' or free text."""
+    norm = normalize(text)
+    if norm.lower().startswith("obr:"):
+        return norm[4:].strip()
+    return None
+
+
+def parse_onboard_timeline(text: str) -> str | None:
+    """Parse timeline selection during onboarding: 'obt:<value>'."""
+    norm = normalize(text)
+    if norm.lower().startswith("obt:"):
+        return norm[4:].strip()
+    return None
+
