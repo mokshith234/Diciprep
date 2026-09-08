@@ -151,9 +151,20 @@ async def lifespan(_app: FastAPI):
                             data = json.loads(raw.body)
                             events = data.get("events") or []
                             if events:
+                                def _dispatch_task(body, headers):
+                                    try:
+                                        results = cx.handle("gateway", body, headers)
+                                        for r in results:
+                                            if not r.is_ok:
+                                                log.warning("Caspian dispatch error: %s", r.error)
+                                            else:
+                                                log.info("Caspian dispatched: %s", getattr(r.value, "raw", ""))
+                                    except Exception as exc:
+                                        log.exception("Error in cx.handle: %s", exc)
+
                                 threading.Thread(
-                                    target=cx.handle,
-                                    args=("gateway", raw.body, raw.headers),
+                                    target=_dispatch_task,
+                                    args=(raw.body, raw.headers),
                                     daemon=True,
                                 ).start()
                         except Exception:
