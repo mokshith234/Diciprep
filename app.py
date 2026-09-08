@@ -206,6 +206,11 @@ async def root() -> dict[str, str]:
     }
 
 
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return {"status": "ok", "service": "PlacementPrep AI"}
+
+
 @app.get("/webhook")
 async def verify_webhook(request: Request) -> Response:
     params = dict(request.query_params)
