@@ -12,6 +12,7 @@ import re as _re
 import db
 from commands import (
     is_followup,
+    is_asking_question_or_clarification,
     looks_like_answer,
     parse_command,
     parse_company_command,
@@ -38,6 +39,7 @@ from llm import (
     generate_question,
     parse_score,
     show_solution,
+    tutor_reason_and_answer,
 )
 from outbound import post_chunks
 
@@ -474,16 +476,23 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
 
     # --- Contextual handling ---
     if pending:
-        if is_stale and not looks_like_answer(text) and not is_followup(text):
+        if is_stale and not looks_like_answer(text) and not is_asking_question_or_clarification(text):
             _prompt_stale_question(thread, user, pending, age_seconds)
             return
 
-        if is_followup(text):
+        if is_asking_question_or_clarification(text):
             try:
-                post_chunks(thread, explain_followup(pending, "", text))
+                track = (user or {}).get("track") or "General SDE"
+                ans = tutor_reason_and_answer(text, active_question=pending, track=track)
+                post_chunks(thread, ans)
+                thread.post(
+                    "💡 _Your mock drill question is still active above! "
+                    "Whenever you're ready, reply with your code or step-by-step logic._",
+                    actions=DRILL_BUTTONS,
+                )
             except Exception:
-                log.exception("Follow-up explanation failed")
-                thread.post("Couldn't generate the explanation. Try asking again!")
+                log.exception("Clarification/question tutor failed")
+                thread.post("Couldn't process that question right now. Try asking again!")
             return
 
         _grade(thread, phone, pending, text, user)
@@ -833,15 +842,15 @@ def _show_summary(thread: Thread, phone: str, user: dict | None) -> None:
 
 def _open_tutoring(thread: Thread, phone: str, text: str, user: dict | None) -> None:
     """Handle open-ended messages when no command or pending question applies."""
-    from llm import generate
-
     track = (user or {}).get("track") or "General SDE"
     try:
-        reply = generate(
-            f"The student (track {track}) sent this with no open mock question. "
-            f"Coach them briefly and offer to start a drill.\n\n{text}"
-        )
+        reply = tutor_reason_and_answer(text, active_question="", track=track)
         post_chunks(thread, reply)
+        thread.post(
+            "🚀 *Ready to practice?*\n"
+            "Send *drill* for a 3-question live mock, or tap below to pick a topic:",
+            actions=SWITCH_MOOD_BUTTONS,
+        )
     except Exception:
         log.exception("Open tutoring generation failed")
         thread.post(FALLBACK_MSG)

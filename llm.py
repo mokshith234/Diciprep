@@ -149,47 +149,103 @@ def pick_topic(track: str) -> str:
 def generate_question(track: str, topic: str | None = None, difficulty: str = "easy") -> tuple[str, str]:
     topic = topic or pick_topic(track)
     diff_desc = DIFFICULTY_DESCRIPTORS.get(difficulty, DIFFICULTY_DESCRIPTORS["easy"])
+
+    SCENARIO_SEEDS = [
+        "real-time payment ledger or wallet transaction balance",
+        "ride-sharing driver allocation or nearest cab matching",
+        "streaming audio/video playlist buffer or sliding window",
+        "e-commerce flash sale stock decrement or cart checkout",
+        "social media timeline feed ranking or hashtag counter",
+        "cloud container scheduler or memory allocator",
+        "search auto-complete trie or inverted document index",
+        "distributed key-value store with TTL cache eviction",
+        "financial fraud detection threshold or anomaly detector",
+        "log file error parser or log aggregation pipeline",
+    ]
+    seed = random.choice(SCENARIO_SEEDS)
+
     prompt = (
-        f"Create ONE campus-placement interview question for the '{track}' track on topic: {topic}.\n"
-        f"Difficulty: {difficulty.upper()} — {diff_desc}\n"
-        "Make it solvable in a messaging chat (concise problem statement, clear input/output or scenario).\n"
-        "Do not reveal the solution.\n"
-        "CRITICAL: Do NOT use LaTeX math ($ or \\frac). Use standard text formulas like WT = Start - Arrival.\n"
-        "Use single asterisks *bold*, never double asterisks **.\n"
+        f"You are an elite Senior Staff Engineer interviewing candidates for '{track}'.\n"
+        f"Topic: {topic} | Difficulty: {difficulty.upper()} ({diff_desc})\n"
+        f"Engineering Context: {seed}\n\n"
+        "Create ONE fresh, practical, and highly engaging placement interview question.\n"
+        "CRITICAL RULES:\n"
+        "- Do NOT generate cliché LeetCode #1 Two-Sum problems. Ground the problem in the engineering context above!\n"
+        "- Solvable in a chat conversation with clear constraints and a concrete worked example.\n"
+        "- Do NOT reveal the solution.\n"
+        "- Use single asterisks *bold*, never double asterisks **. NO LaTeX math.\n\n"
         "Format cleanly:\n"
-        f"*Topic:* {topic}\n"
-        f"*Difficulty:* {difficulty.capitalize()}\n\n"
-        "*Question:*\n...\n\n"
-        "*Constraints / Examples:*\n...\n\n"
-        "*Your move:* Reply with your step-by-step approach or code."
+        f"📌 *Topic:* {topic}\n"
+        f"⚡ *Difficulty:* {difficulty.capitalize()}\n\n"
+        "🏢 *Scenario & Problem:*\n(Clear scenario description)\n\n"
+        "📋 *Input / Output & Constraints:*\n• Input: ...\n• Output: ...\n• Constraints: ...\n\n"
+        "💡 *Worked Example:*\n(Sample input -> expected output with brief explanation)\n\n"
+        "🎯 *Your Move:* Reply with your logic, time complexity, or code. (You can also ask questions or discuss trade-offs!)"
     )
     return generate(prompt), topic
 
 
 def generate_capsule(track: str) -> str:
     prompt = (
-        f"Write a 8:00 AM WhatsApp morning capsule for a {track} campus placement student.\n"
-        "Include: 1 punchy industry/tech fact, 1 must-know CS concept (DBMS/OS/DSA), "
-        "and 1 one-line interview tip. Under 120 words. No question yet."
+        f"Write an inspiring, bite-sized 8:00 AM morning capsule for a {track} campus placement student.\n"
+        "Include: 1 punchy industry/tech fact, 1 high-yield CS insight (DBMS/OS/DSA), "
+        "and 1 practical interview wisdom tip. Under 120 words. Friendly and energizing."
     )
     return generate(prompt)
 
 
 def evaluate_answer(question: str, answer: str, track: str) -> str:
     prompt = (
-        f"Track: {track}\n\nQuestion given to the student:\n{question}\n\n"
-        f"Student answer:\n{answer}\n\nGrade it using the required structure."
+        f"You are an encouraging Senior Staff Engineer interviewing a student for a {track} role.\n\n"
+        f"Interview Question:\n{question}\n\n"
+        f"Student Answer / Code Attempt:\n{answer}\n\n"
+        "Evaluate their response with thorough reasoning and deep diagnostic insight:\n"
+        "1. *Verdict:* 🌟 Correct (10/10) / ⚡ Partially Correct (Score/10) / 🔍 Needs Work (Score/10)\n"
+        "2. *Score:* <integer 1-10>\n"
+        "3. *What Was Good:* praise their positive intuition, approach, or valid code\n"
+        "4. *Mistake Analysis & Counterexample:* (CRITICAL)\n"
+        "   - If there is ANY bug, logical flaw, or unhandled edge case, pinpoint EXACTLY where it fails!\n"
+        "   - Provide the concrete breaking test case (e.g. `arr = [0, -1]`, `k > n`, empty input, duplicates).\n"
+        "   - Explain WHY this bug occurs and the mental model needed to avoid it in interviews.\n"
+        "5. *How to Fix It:* step-by-step guidance on adjusting their idea.\n"
+        "6. *Optimal Production Code:* clean, well-commented, industry-standard implementation.\n"
+        "7. *Complexity:* Time O(...) · Space O(...)\n"
+        "8. *Interviewer Follow-Up:* 1 quick follow-up question or thought experiment to test their mastery.\n\n"
+        "Rules: single asterisks *bold*, NO LaTeX math ($ or \\frac). Encouraging, enjoyable engineering mentor tone."
+    )
+    return generate(prompt)
+
+
+def tutor_reason_and_answer(
+    user_query: str,
+    active_question: str = "",
+    track: str = "Software Development",
+) -> str:
+    """Think, reason, and answer any technical, algorithmic, or conceptual question.
+
+    Acts as an empathetic, brilliant tech mentor who explains things with
+    clarity, intuitive analogies, concrete examples, and practical interview relevance.
+    """
+    context_clause = f"\nActive Interview Drill Question:\n{active_question}\n" if active_question else ""
+    prompt = (
+        "You are an inspiring Senior Tech Mentor & Placement Coach.\n"
+        f"Student Track: {track}{context_clause}\n\n"
+        f"Student asked / said:\n\"{user_query}\"\n\n"
+        "THINK AND REASON THROUGH THIS STEP-BY-STEP:\n"
+        "- If the student is asking a question or doubt about the active drill:\n"
+        "  Directly clarify the constraint, validate their thought process, or nudge them in the right direction without giving away the full code.\n"
+        "- If the student is asking a conceptual, technical, or interview question:\n"
+        "  1. 💡 *Core Intuition / The 'Aha!' Concept*: explain the core idea with an intuitive real-world analogy or mental model.\n"
+        "  2. ⚙️ *How it Works (Step-by-Step)*: clear walkthrough or small illustrative code/table.\n"
+        "  3. ⚠️ *Common Placement Pitfalls & Edge Cases*: what interviewers watch out for and common mistakes students make.\n"
+        "  4. 🎯 *Takeaway & Next Step*: a punchy 1-line recap.\n\n"
+        "Tone: Engaging, empowering, clear, conversational. Single asterisks for *bold*, NO LaTeX math."
     )
     return generate(prompt)
 
 
 def explain_followup(question: str, answer: str, followup: str) -> str:
-    prompt = (
-        f"The open question was:\n{question}\n\n"
-        f"Student previously said:\n{answer or '(none yet)'}\n\n"
-        f"Follow-up: {followup}\n\nTeach this point only. Stay WhatsApp-short."
-    )
-    return generate(prompt)
+    return tutor_reason_and_answer(followup, active_question=question)
 
 
 def show_solution(question: str, track: str) -> str:
@@ -206,6 +262,8 @@ def parse_score(feedback: str) -> int | None:
     match = re.search(r"\*Score:\*\s*(\d{1,2})", feedback, re.I)
     if not match:
         match = re.search(r"Score:\s*(\d{1,2})", feedback, re.I)
+    if not match:
+        match = re.search(r"(\d{1,2})\s*/\s*10", feedback, re.I)
     if not match:
         return None
     score = int(match.group(1))

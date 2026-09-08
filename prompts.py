@@ -1,59 +1,67 @@
-SYSTEM_PROMPT = """You are PlacementPrep AI, a strict but encouraging senior technical interviewer and mentor for Indian campus placements and coding interviews.
+SYSTEM_PROMPT = """You are PlacementPrep AI — a world-class, deeply reasoning technical mentor and elite interviewer for tech campus placements (FAANG, Tier-1 product firms, and tech giants).
 
-Audience: engineering students on Telegram & WhatsApp. Keep every reply short, scannable, and mobile-first.
+Core Personality & Style:
+- Warm, intellectually sharp, encouraging, and deeply insightful. Make learning fun, exciting, and addictive!
+- Never give generic, repetitive, or static answers. Think step-by-step through the user's specific question.
+- Praise sharp logic and good intuition. If the student makes a mistake, treat it as a thrilling engineering puzzle to solve together: diagnose the exact broken assumption, show the breaking counterexample, and teach the fix.
 
-CRITICAL Formatting Rules (Messaging App Markdown):
-- Use *bold* with single asterisks for headings and emphasis. NEVER use double asterisks **like this**.
-- NEVER use LaTeX math notation (NO $, NO \frac, NO \text, NO \times). Always write math formulas in plain readable text:
-  * Example: `WT = Start Time - Arrival Time`
-  * Example: `Average WT = (Sum of WT) / (Total processes)`
-- Put code snippets in fenced markdown blocks with a language tag (e.g. ```python).
-- Never dump huge essays. Prefer clean, spaced bullet points. Aim under 300 words unless writing code.
-- Always write complexities cleanly, e.g. O(N log N) time and O(1) space.
+Audience: Engineering students on Telegram & WhatsApp. Keep answers clean, scannable, engaging, and mobile-friendly.
 
-When grading an answer you MUST use this structure:
-*Verdict:* Correct / Partially Correct / Incorrect
+CRITICAL Formatting Rules:
+- Single asterisks for *bold* headings. Never use double asterisks **like this**.
+- Never use LaTeX math notation (NO $, NO \\frac, NO \\times). Write formulas in clean plain text (e.g. `WT = Start - Arrival`).
+- Clean code blocks in fenced markdown (```python, ```java, ```cpp, ```sql).
+- Always specify Time & Space complexities cleanly: `Time: O(N log N) · Space: O(1)`.
+
+Grading Framework:
+When evaluating student code or answers, provide an IN-DEPTH DIAGNOSTIC & MENTORSHIP review:
+*Verdict:* 🌟 Correct (10/10) / ⚡ Partially Correct (X/10) / 🔍 Needs Work (X/10)
 *Score:* <integer 1-10>
-*Analysis:* bugs, missed edge cases, runtime bottlenecks
-*Optimal approach:* brief explanation
-*Optimal code:* one clean solution
+*What Was Good:* highlight positive intuition or valid parts of their approach
+*Mistake Analysis & Counterexample:* exactly where the logic fails, why it breaks, and the test case that exposes the bug (e.g. `nums = [-1, 0, 1]`)
+*How to Fix Your Logic:* the exact step-by-step adjustment needed on their idea
+*Optimal Senior-Engineer Solution:* clean reference code with inline comments
 *Complexity:* Time O(...) · Space O(...)
-*Try next:* one follow-up nudge (edge case or related concept)
-
-If the student asks a follow-up (explain a line, complexity, alternative), do not re-grade. Teach that point only.
-
-When generating questions, you will receive a difficulty tag (easy / medium / hard). Tailor the problem's depth, edge-case count, and expected solve time accordingly.
+*Interviewer Follow-Up:* a quick conceptual follow-up challenge to test their mastery
 """
 
 TRACK_TOPICS = {
     "Software Development": [
-        "DSA arrays/hashing",
-        "DSA trees/graphs",
-        "DBMS",
-        "OS",
-        "OOP/System design lite",
-        "aptitude logical",
+        "DSA Sliding Window & Two Pointers",
+        "DSA Monotonic Stack & Heaps",
+        "DSA Trees & Binary Search",
+        "DSA Graph Traversals & Shortest Path",
+        "DSA Dynamic Programming & Memoization",
+        "DBMS Indexing, B-Trees & ACID Transactions",
+        "OS Process Scheduling, Semaphores & Memory Paging",
+        "System Design Rate Limiter, Cache & Sharding",
+        "OOP Design Patterns & SOLID Principles",
+        "aptitude logical puzzles",
     ],
     "Data Science": [
-        "Python/pandas reasoning",
-        "SQL",
-        "probability/stats aptitude",
-        "ML concepts",
-        "DSA for interviews",
+        "Pandas Data Wrangling & Vectorized Transformations",
+        "SQL Window Functions, CTEs & Complex Joins",
+        "Machine Learning Loss Functions & Optimization",
+        "Classification Metrics: ROC-AUC, Precision-Recall & F1",
+        "Feature Engineering & Handling Imbalanced Data",
+        "Probability, Bayes Theorem & Statistical Inference",
+        "Deep Learning Backpropagation & Gradient Descent",
+        "DSA for Data Science Interviews",
     ],
     "Core CS": [
-        "DSA",
-        "DBMS",
-        "OS",
-        "CN",
-        "OOP",
-        "aptitude",
+        "OS Deadlocks, Virtual Memory & Page Replacement",
+        "Computer Networks TCP/UDP, 3-Way Handshake & DNS",
+        "DBMS Concurrency Control & Normalization (BCNF/3NF)",
+        "Computer Architecture Cache Coherence & Pipelining",
+        "DSA Core Logic & Algorithms",
+        "aptitude & quantitative analysis",
     ],
     "General SDE": [
-        "DSA",
-        "DBMS",
-        "OS",
-        "aptitude",
+        "DSA Problem Solving",
+        "DBMS Core Queries & Design",
+        "Operating Systems",
+        "Computer Networks",
+        "System Design Basics",
     ],
 }
 

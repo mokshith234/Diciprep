@@ -231,7 +231,39 @@ def looks_like_answer(text: str) -> bool:
 
 
 def is_followup(text: str) -> bool:
-    return bool(FOLLOWUP_RE.search(normalize(text)))
+    return is_asking_question_or_clarification(text)
+
+
+def is_asking_question_or_clarification(text: str) -> bool:
+    """Detect if the student is asking a question or seeking clarification instead of submitting an answer."""
+    norm = normalize(text).strip()
+    if not norm:
+        return False
+    lower = norm.lower()
+
+    # 1. Ends with a question mark
+    if norm.endswith("?"):
+        return True
+
+    # 2. Starts with common question words or phrases
+    question_starters = (
+        "can i", "can we", "could i", "could we", "is it", "is there",
+        "how to", "how do", "how does", "how can", "why do", "why does", "why is", "why would",
+        "what is", "what are", "what does", "what if", "what about",
+        "explain", "clarify", "tell me", "meaning of", "i don't understand",
+        "i dont understand", "i am stuck", "im stuck", "what do you mean",
+        "difference between", "should i", "should we", "does it", "does this",
+        "where does", "where is", "which one", "which algorithm",
+        "is this", "are we", "will this",
+    )
+    if any(lower.startswith(q) for q in question_starters):
+        return True
+
+    # 3. Matches existing FOLLOWUP_RE
+    if FOLLOWUP_RE.search(norm):
+        return True
+
+    return False
 
 
 def parse_track_payload(text: str) -> str | None:

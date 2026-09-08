@@ -170,3 +170,24 @@ def test_target_profile():
     # None on empty
     assert parse_target_profile("") is None
 
+
+def test_is_asking_question_or_clarification():
+    from commands import is_asking_question_or_clarification
+
+    # Question endings
+    assert is_asking_question_or_clarification("Can I use extra space?") is True
+    assert is_asking_question_or_clarification("Is the array sorted?") is True
+    assert is_asking_question_or_clarification("What if n is 0?") is True
+
+    # Question starters
+    assert is_asking_question_or_clarification("how to solve this") is True
+    assert is_asking_question_or_clarification("why does this happen") is True
+    assert is_asking_question_or_clarification("what is binary search") is True
+    assert is_asking_question_or_clarification("i don't understand the problem") is True
+    assert is_asking_question_or_clarification("explain this approach") is True
+
+    # Code answers should NOT be flagged as questions
+    assert is_asking_question_or_clarification("def solve(nums): return sum(nums)") is False
+    assert is_asking_question_or_clarification("int ans = 0; for(int i=0; i<n; i++) ans += arr[i];") is False
+
+
