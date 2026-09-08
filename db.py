@@ -69,6 +69,9 @@ def init_db() -> None:
         hint_count INT DEFAULT 0,
         consecutive_good INT DEFAULT 0,
         consecutive_bad INT DEFAULT 0,
+        target_company VARCHAR(64) DEFAULT '',
+        target_role VARCHAR(128) DEFAULT '',
+        resume_summary TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """
@@ -101,8 +104,8 @@ def init_db() -> None:
         conn.execute(users_sql)
         conn.execute(drills_sql)
 
-        # -- migrate: add new columns if missing
-        for col, col_def in [
+        # -- migrate: add new columns if missing on existing databases
+        cols_to_add = [
             ("difficulty", "VARCHAR(16) DEFAULT 'easy'"),
             ("hint_count", "INT DEFAULT 0"),
             ("consecutive_good", "INT DEFAULT 0"),
@@ -110,11 +113,15 @@ def init_db() -> None:
             ("target_company", "VARCHAR(64) DEFAULT ''"),
             ("target_role", "VARCHAR(128) DEFAULT ''"),
             ("resume_summary", "TEXT DEFAULT ''"),
-        ]:
-            try:
-                conn.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
-            except Exception:
-                pass  # column already exists
+        ]
+        if _is_postgres():
+            for col, col_def in cols_to_add:
+                conn.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {col_def}")
+        else:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+            for col, col_def in cols_to_add:
+                if col not in existing_cols:
+                    conn.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
 
 
 def upsert_user(phone: str, name: str | None = None, track: str | None = None) -> dict[str, Any]:
