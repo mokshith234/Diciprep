@@ -45,8 +45,9 @@ log = logging.getLogger("placementprep.bot")
 # ── Onboarding buttons ─────────────────────────────────────────────
 
 ONBOARDING_BUTTONS = (
-    Button(label="🎯 I'll Pick My Prep", data="onboard:manual"),
-    Button(label="🤖 AI Reads My Resume", data="onboard:ai"),
+    Button(label="🎯 Pick My Track", data="onboard:manual"),
+    Button(label="🤖 AI Resume Scanner", data="onboard:ai"),
+    Button(label="⚡ Instant Mock Drill", data="cmd:drill"),
 )
 
 TRACK_BUTTONS = (
@@ -109,14 +110,39 @@ MENU_BUTTONS = (
     Button(label="🔄 Switch Mood", data="cmd:switch_mood"),
 )
 
-WELCOME = (
-    "🚀 *Welcome to PlacementPrep AI!*\n\n"
-    "Your personal campus placement coach — adaptive mocks, instant code reviews, "
-    "resume analysis & daily capsules.\n\n"
-    "*How would you like to start?*\n\n"
-    "🎯 *Pick My Prep* — Choose your own track & topics\n"
-    "🤖 *AI Reads My Resume* — Paste your resume and I'll build a personalized plan\n"
-)
+def build_welcome_message(name: str = "") -> str:
+    """Build a rich, vibrant, and immersive startup welcome card."""
+    clean_name = f" {name.strip()}" if name and name.strip() else ""
+    return (
+        "╔══════════════════════════════╗\n"
+        "   🚀  *PLACEMENT PREP AI*  ⚡\n"
+        "   _The 24/7 Elite Tech Career Studio_\n"
+        "╚══════════════════════════════╝\n\n"
+        f"👋 *Hey{clean_name}! Welcome to your placement command center.*\n\n"
+        "Ready to crack *Google, Amazon, Microsoft, or top-tier tech firms*? "
+        "I'm your personal AI placement mentor — here to drill your algorithms, review your code, "
+        "analyze your resume, and elevate your interview confidence.\n\n"
+        "🌟 *WHAT WE'LL DO TOGETHER:*\n"
+        "╭───────────────────────────────\n"
+        "│ 🎯 *Adaptive Mock Drills*\n"
+        "│    └ Live interview questions with instant grading & hints\n"
+        "│ 📄 *Resume & Skill Intelligence*\n"
+        "│    └ Deep scan of your projects, gaps & role alignment\n"
+        "│ 🏢 *Company-Targeted Modules*\n"
+        "│    └ Curated questions modeled after top tech recruiters\n"
+        "│ 🔥 *Streak & Daily Capsules*\n"
+        "│    └ Daily 8:00 AM micro-challenges to stay sharp\n"
+        "╰───────────────────────────────\n\n"
+        "✨ *CHOOSE YOUR LAUNCHPAD:*\n\n"
+        "1️⃣ 🎯 *Pick My Track* — Choose your domain (SDE / Data Science / Core CS)\n"
+        "2️⃣ 🤖 *AI Resume Scanner* — Paste resume text to build a tailored plan\n"
+        "3️⃣ ⚡ *Instant Drill* — Jump straight into a 3-question live mock!\n\n"
+        "👇 _Tap an option below to begin:_"
+    )
+
+
+WELCOME = build_welcome_message()
+
 
 HELP = (
     "*PlacementPrep AI Commands*\n"
@@ -213,21 +239,32 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
     if onboard_choice == "manual":
         db.set_onboarding_step(phone, None)
         thread.post(
-            "🎯 *Great! Let's set up your prep track.*\n\n"
-            "Pick your target track below:",
+            "🎯 *CUSTOM PREP SETUP*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Pick your target domain below to calibrate your questions, "
+            "difficulty scaling, and daily capsules:\n\n"
+            "💻 *SDE Track* — DSA, System Design, OOP & Algorithms\n"
+            "📊 *Data Science* — Python, Machine Learning, Stats & SQL\n"
+            "⚙️ *Core CS* — Operating Systems, DBMS, Networks & Architecture\n\n"
+            "👇 _Select your track below:_",
             actions=TRACK_BUTTONS,
         )
         return
     if onboard_choice == "ai":
         db.set_onboarding_step(phone, "awaiting_resume")
         thread.post(
-            "🤖 *AI-Powered Prep Setup*\n\n"
-            "Paste your resume, skills, or project descriptions below.\n\n"
-            "_Example:_\n"
-            "`3rd year CSE, built fullstack app with React/Node, "
-            "skilled in Java, Python, DSA, OS, DBMS. "
-            "Interned at XYZ Corp on backend microservices.`\n\n"
-            "📋 *Just paste your text and I'll extract everything!*"
+            "🤖 *AI RESUME INTELLIGENCE ENGINE*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Drop your resume text, LinkedIn summary, or skill profile right here! 📄✨\n\n"
+            "🔍 *What I'll do:*\n"
+            "✦ Identify your core technical strengths & stacks\n"
+            "✦ Spot critical interview gaps for your target roles\n"
+            "✦ Formulate a custom step-by-step prep roadmap\n\n"
+            "💡 _Quick Example to copy/paste:_\n"
+            "`3rd year CSE. Strong in Java, C++, Python, DSA, DBMS.\n"
+            "Built a Fullstack MERN e-commerce app and a Redis caching layer.\n"
+            "Targeting SDE-1 backend roles at Tier-1 companies.`\n\n"
+            "📋 *Simply paste your resume or summary below to get started!* 👇"
         )
         return
 
@@ -245,8 +282,14 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
         except Exception:
             log.exception("Failed to set track for %s", phone)
         thread.post(
-            f"✅ Track set to *{track_choice}*.\n\n"
-            "Send *drill* for a 3-question mock, or *company <name>* to target a specific firm!",
+            f"🎉 *Track Confirmed: {track_choice}!* 🚀\n\n"
+            "Your placement training environment is now configured.\n"
+            "I will adapt every drill and daily capsule to this domain.\n\n"
+            "⚡ *Quick Launch:*\n"
+            "• Tap *3-Question Mock* below to start your first drill\n"
+            "• Or send `company amazon` / `company google` to target specific firms!\n\n"
+            "👇 _Ready when you are:_",
+            actions=MENU_BUTTONS,
         )
         return
 
@@ -335,7 +378,8 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
             _prompt_stale_question(thread, user, pending, age_seconds)
             return
         db.clear_pending(phone)
-        thread.post(WELCOME, actions=ONBOARDING_BUTTONS)
+        display_name = name or (user or {}).get("name") or ""
+        thread.post(build_welcome_message(display_name), actions=ONBOARDING_BUTTONS)
         return
     if cmd == "menu":
         thread.post(
@@ -455,8 +499,9 @@ def _handle_onboarding(thread: Thread, phone: str, text: str, user: dict | None,
     cmd = parse_command(text)
     if cmd in ("start", "clear", "switch", "help", "drill"):
         db.set_onboarding_step(phone, None)
+        user_name = (user or {}).get("name") or ""
         if cmd == "start":
-            thread.post(WELCOME, actions=ONBOARDING_BUTTONS)
+            thread.post(build_welcome_message(user_name), actions=ONBOARDING_BUTTONS)
         elif cmd == "clear":
             db.force_clear_all_state(phone)
             thread.post(
@@ -485,7 +530,8 @@ def _handle_onboarding(thread: Thread, phone: str, text: str, user: dict | None,
     else:
         # Unknown step — reset
         db.set_onboarding_step(phone, None)
-        thread.post(WELCOME, actions=ONBOARDING_BUTTONS)
+        user_name = (user or {}).get("name") or ""
+        thread.post(build_welcome_message(user_name), actions=ONBOARDING_BUTTONS)
 
 
 def _onboard_resume(thread: Thread, phone: str, text: str) -> None:
