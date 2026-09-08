@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Iterator
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
@@ -72,6 +72,7 @@ def init_db() -> None:
         target_company VARCHAR(64) DEFAULT '',
         target_role VARCHAR(128) DEFAULT '',
         resume_summary TEXT DEFAULT '',
+        pending_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """
@@ -113,6 +114,7 @@ def init_db() -> None:
             ("target_company", "VARCHAR(64) DEFAULT ''"),
             ("target_role", "VARCHAR(128) DEFAULT ''"),
             ("resume_summary", "TEXT DEFAULT ''"),
+            ("pending_at", "TIMESTAMP"),
         ]
         if _is_postgres():
             for col, col_def in cols_to_add:
@@ -159,18 +161,56 @@ def list_users() -> list[dict[str, Any]]:
 
 def set_pending(phone: str, question: str | None, topic: str | None, drill_remaining: int | None = None) -> None:
     with get_conn() as conn:
-        if drill_remaining is None:
-            conn.execute(
-                _q("UPDATE users SET pending_question = ?, pending_topic = ? WHERE phone_number = ?"),
-                (question, topic, phone),
-            )
+        if question:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if drill_remaining is None:
+                conn.execute(
+                    _q(
+                        "UPDATE users SET pending_question = ?, pending_topic = ?, pending_at = ? WHERE phone_number = ?"
+                    ),
+                    (question, topic, now_iso, phone),
+                )
+            else:
+                conn.execute(
+                    _q(
+                        "UPDATE users SET pending_question = ?, pending_topic = ?, drill_remaining = ?, pending_at = ? WHERE phone_number = ?"
+                    ),
+                    (question, topic, drill_remaining, now_iso, phone),
+                )
         else:
             conn.execute(
                 _q(
-                    "UPDATE users SET pending_question = ?, pending_topic = ?, drill_remaining = ? WHERE phone_number = ?"
+                    "UPDATE users SET pending_question = NULL, pending_topic = NULL, drill_remaining = 0, hint_count = 0, pending_at = NULL WHERE phone_number = ?"
                 ),
-                (question, topic, drill_remaining, phone),
+                (phone,),
             )
+
+
+def clear_pending(phone: str) -> None:
+    set_pending(phone, None, None, drill_remaining=0)
+
+
+def get_pending_age_seconds(user: dict[str, Any] | None) -> float | None:
+    """Returns elapsed seconds since pending_question was set, or None if no pending question."""
+    if not user or not user.get("pending_question"):
+        return None
+    val = user.get("pending_at")
+    if not val:
+        return None
+    try:
+        now_utc = datetime.now(timezone.utc)
+        if isinstance(val, str):
+            dt = datetime.fromisoformat(val)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return (now_utc - dt).total_seconds()
+        elif isinstance(val, datetime):
+            if val.tzinfo is None:
+                val = val.replace(tzinfo=timezone.utc)
+            return (now_utc - val).total_seconds()
+    except Exception:
+        return None
+    return None
 
 
 def update_profile(

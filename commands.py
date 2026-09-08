@@ -23,8 +23,8 @@ COMMAND_ALIASES = {
     "/stats": "streak",
     "solution": "solution",
     "/solution": "solution",
-    "skip": "solution",
-    "/skip": "solution",
+    "skip": "skip",
+    "/skip": "skip",
     "help": "help",
     "/help": "help",
     "hint": "hint",
@@ -39,7 +39,7 @@ COMMAND_ALIASES = {
     # Interactive action button payloads
     "cmd:hint": "hint",
     "cmd:solution": "solution",
-    "cmd:skip": "solution",
+    "cmd:skip": "skip",
     # New features
     "menu": "menu",
     "/menu": "menu",
@@ -59,6 +59,18 @@ COMMAND_ALIASES = {
     "/company": "company",
     "role": "role",
     "/role": "role",
+    # Switch mood / cancel / resume
+    "switch": "switch",
+    "/switch": "switch",
+    "change": "switch",
+    "/change": "switch",
+    "cancel": "switch",
+    "/cancel": "switch",
+    "cmd:switch": "switch",
+    "cmd:switch_mood": "switch",
+    "cmd:continue_pending": "continue_pending",
+    "answer": "continue_pending",
+    "continue": "continue_pending",
 }
 
 
@@ -115,6 +127,78 @@ def parse_resume_command(text: str) -> tuple[bool, str]:
     if m:
         return True, m.group(1).strip()
     return False, ""
+
+
+def parse_switch_command(text: str) -> str | bool | None:
+    """
+    Returns:
+      - topic string if user types 'switch <topic>' (e.g. 'switch os' -> 'os', 'switch dsa' -> 'dsa')
+      - True if bare 'switch', '/switch', 'change', 'cancel', 'cmd:switch_mood', 'quit'
+      - None otherwise
+    """
+    norm = normalize(text)
+    m = re.match(r"^/?(?:switch|change)\s+([a-zA-Z0-9_\-\s]+)$", norm, re.I)
+    if m:
+        target = m.group(1).strip().lower()
+        if target not in ("now", "mood", "please", "to"):
+            if target.startswith("to "):
+                target = target[3:].strip()
+            return target
+        return True
+    if norm.lower() in (
+        "switch",
+        "/switch",
+        "change",
+        "/change",
+        "cancel",
+        "/cancel",
+        "stop",
+        "reset",
+        "quit",
+        "cmd:switch_mood",
+        "cmd:switch",
+    ):
+        return True
+    return None
+
+
+def looks_like_answer(text: str) -> bool:
+    """
+    Detects if incoming text looks like a deliberate code solution,
+    calculation, or technical explanation rather than a casual greeting or intent change.
+    """
+    norm = normalize(text)
+    if not norm:
+        return False
+    lower = norm.lower()
+
+    # Short conversational greetings, confirmations, or questions
+    greetings = {
+        "hi", "hello", "hey", "hola", "yo", "sup", "ready", "start",
+        "prep", "test", "ok", "okay", "yes", "no", "help", "menu", "what",
+    }
+    if lower in greetings or len(lower) <= 3:
+        return False
+
+    # Conversational intent questions (e.g. "can we do...", "how to...", "what is...")
+    if re.match(r"^(can we|could you|how to|what is|tell me|explain)\b", lower):
+        return False
+
+    # Code syntax or mathematical indicators
+    code_indicators = [
+        "def ", "class ", "int ", "float ", "return ", "select ", "from ",
+        "{", "}", "public ", "for ", "while ", "->", "=", "ms", "o(1)", "o(n)",
+        "arr[", "nums[", "vector<", "cout", "print(", "fn ", "const ", "let "
+    ]
+    if any(ind in lower for ind in code_indicators):
+        return True
+
+    # Multi-line or substantial answer (more than 10 words or >= 50 characters)
+    words = norm.split()
+    if len(words) >= 10 or (len(norm) >= 50 and "\n" in norm):
+        return True
+
+    return False
 
 
 def is_followup(text: str) -> bool:

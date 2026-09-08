@@ -55,7 +55,13 @@ def test_new_commands():
     # Action buttons
     assert parse_command("cmd:hint") == "hint"
     assert parse_command("cmd:solution") == "solution"
-    assert parse_command("cmd:skip") == "solution"
+    assert parse_command("cmd:skip") == "skip"
+    assert parse_command("skip") == "skip"
+    assert parse_command("switch") == "switch"
+    assert parse_command("/switch") == "switch"
+    assert parse_command("cancel") == "switch"
+    assert parse_command("cmd:switch_mood") == "switch"
+    assert parse_command("cmd:continue_pending") == "continue_pending"
 
     # Summary
     assert parse_command("summary") == "summary"
@@ -82,3 +88,48 @@ def test_parameterized_features():
     assert is_res is True
     assert "React" in text
     assert parse_resume_command("/resume")[0] is True
+
+
+def test_switch_and_mood_commands():
+    from commands import looks_like_answer, parse_switch_command
+
+    assert parse_switch_command("switch") is True
+    assert parse_switch_command("/switch") is True
+    assert parse_switch_command("cancel") is True
+    assert parse_switch_command("cmd:switch_mood") is True
+    assert parse_switch_command("switch os") == "os"
+    assert parse_switch_command("switch to dsa") == "dsa"
+    assert parse_switch_command("change dbms") == "dbms"
+    assert parse_switch_command("hello") is None
+
+    # looks_like_answer checks
+    assert looks_like_answer("hi") is False
+    assert looks_like_answer("hey") is False
+    assert looks_like_answer("what is binary search?") is False
+    assert looks_like_answer("can we do dbms?") is False
+    assert looks_like_answer("def solve(): return 42") is True
+    assert looks_like_answer("WT = [0, 24, 27], avg = 17ms") is True
+    assert looks_like_answer("In FCFS, process 1 executes from 0 to 24, process 2 executes from 24 to 27") is True
+
+
+def test_pending_age():
+    from datetime import datetime, timedelta, timezone
+
+    import db
+
+    user = {
+        "pending_question": "What is FCFS?",
+        "pending_at": (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat(),
+    }
+    age = db.get_pending_age_seconds(user)
+    assert age is not None
+    assert 1190 <= age <= 1210
+
+    user_fresh = {
+        "pending_question": "What is FCFS?",
+        "pending_at": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+    }
+    assert db.get_pending_age_seconds(user_fresh) < 100
+
+    assert db.get_pending_age_seconds({}) is None
+    assert db.get_pending_age_seconds(None) is None

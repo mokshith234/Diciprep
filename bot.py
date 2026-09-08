@@ -9,10 +9,12 @@ from caspian import Button, Caspian, HandlerContext, Message, Thread
 import db
 from commands import (
     is_followup,
+    looks_like_answer,
     parse_command,
     parse_company_command,
     parse_resume_command,
     parse_role_command,
+    parse_switch_command,
     parse_topic_drill,
     parse_track_payload,
 )
@@ -41,12 +43,29 @@ DRILL_BUTTONS = (
     Button(label="💡 Hint", data="cmd:hint"),
     Button(label="📖 Solution", data="cmd:solution"),
     Button(label="⏭ Skip", data="cmd:skip"),
+    Button(label="🔄 Switch Mood", data="cmd:switch_mood"),
+)
+
+STALE_QUESTION_BUTTONS = (
+    Button(label="✍️ Answer It", data="cmd:continue_pending"),
+    Button(label="🔄 Switch Mood", data="cmd:switch_mood"),
+    Button(label="📖 Solution", data="cmd:solution"),
+    Button(label="⏭ Skip", data="cmd:skip"),
+)
+
+SWITCH_MOOD_BUTTONS = (
+    Button(label="💻 DSA Drill", data="drill dsa"),
+    Button(label="⚙️ OS Drill", data="drill os"),
+    Button(label="🗄️ DBMS Drill", data="drill dbms"),
+    Button(label="🌐 CN Drill", data="drill cn"),
+    Button(label="🏢 Company Mock", data="cmd:menu"),
 )
 
 MENU_BUTTONS = (
     Button(label="🎯 3-Question Mock", data="cmd:drill"),
     Button(label="📊 My Stats", data="cmd:streak"),
     Button(label="📑 Today's Summary", data="cmd:summary"),
+    Button(label="🔄 Switch Mood", data="cmd:switch_mood"),
 )
 
 WELCOME = (
@@ -111,6 +130,25 @@ def handle_text(thread: Thread, msg: Message, text: str) -> None:
         )
         return
 
+    # --- Switch prep mood / cancel active drill ---
+    switch_target = parse_switch_command(text)
+    if switch_target:
+        db.clear_pending(phone)
+        if isinstance(switch_target, str):
+            _start_drill(thread, phone, topic=switch_target)
+            return
+        thread.post(
+            "🔄 *Prep Mood Switched!*\n\n"
+            "Your previous question is cleared. What would you like to prepare now?\n\n"
+            "• *Topic Drill* — `drill os`, `drill dsa`, `drill dbms`, `drill cn`\n"
+            "• *Company Mock* — `company amazon`, `company google`\n"
+            "• *Resume Tailoring* — `resume: <skills/projects>`\n"
+            "• *Random Mock* — `drill`\n\n"
+            "Tap an option below to jump straight in:",
+            actions=SWITCH_MOOD_BUTTONS,
+        )
+        return
+
     # --- Topic-specific drill (e.g. 'drill os', 'drill dsa') ---
     topic_drill = parse_topic_drill(text)
     if topic_drill:
@@ -165,9 +203,33 @@ def handle_text(thread: Thread, msg: Message, text: str) -> None:
             thread.post("Couldn't analyze your resume right now. Please try sending it again.")
         return
 
+    # Stale question check (> 15 minutes unanswered)
+    pending = (user or {}).get("pending_question")
+    age_seconds = db.get_pending_age_seconds(user)
+    is_stale = bool(pending and age_seconds is not None and age_seconds > 900)
+
+    def _prompt_stale_question(pending_q: str, age_sec: float) -> None:
+        topic = ((user or {}).get("pending_topic") or "General").upper()
+        minutes_ago = int(age_sec // 60)
+        time_desc = f"{minutes_ago}m ago" if minutes_ago < 60 else f"{minutes_ago // 60}h ago"
+        q_snippet = pending_q.strip()
+        if len(q_snippet) > 220:
+            q_snippet = q_snippet[:220] + "..."
+        thread.post(
+            f"⏳ *You have an unanswered question from earlier ({time_desc})!*\n\n"
+            f"📌 *Topic:* {topic}\n"
+            f"{q_snippet}\n\n"
+            f"Do you want to continue answering this, or switch your mood to prep something else?",
+            actions=STALE_QUESTION_BUTTONS,
+        )
+
     # --- Explicit commands ---
     cmd = parse_command(text)
     if cmd == "start":
+        if is_stale and text.lower().strip() in ("hi", "hello", "hey", "hola"):
+            _prompt_stale_question(pending, age_seconds)  # type: ignore[arg-type]
+            return
+        db.clear_pending(phone)
         thread.post(WELCOME, actions=TRACK_BUTTONS)
         return
     if cmd == "menu":
@@ -195,6 +257,26 @@ def handle_text(thread: Thread, msg: Message, text: str) -> None:
     if cmd == "solution":
         _give_solution(thread, phone)
         return
+    if cmd == "skip":
+        _skip_question(thread, phone)
+        return
+    if cmd == "continue_pending":
+        pending = (user or {}).get("pending_question")
+        topic = ((user or {}).get("pending_topic") or "General").upper()
+        if not pending:
+            thread.post("You don't have an active question. Send *drill* to start one!")
+            return
+        # Refresh pending timestamp to now so they get a fresh active window
+        db.set_pending(phone, pending, topic, drill_remaining=(user or {}).get("drill_remaining"))
+        post_chunks(
+            thread,
+            f"✍️ *Resumed!*\n\n"
+            f"📌 *Topic:* {topic}\n\n"
+            f"{pending}\n\n"
+            f"_Reply with your code, calculation, or step-by-step approach whenever you're ready!_",
+            actions=DRILL_BUTTONS,
+        )
+        return
     if cmd == "hint":
         _give_hint(thread, phone)
         return
@@ -218,11 +300,15 @@ def handle_text(thread: Thread, msg: Message, text: str) -> None:
         return
 
     # --- Contextual handling ---
-    pending = user.get("pending_question") if user else None
-    if pending and is_followup(text):
-        post_chunks(thread, explain_followup(pending, "", text))
-        return
     if pending:
+        if is_stale and not looks_like_answer(text) and not is_followup(text):
+            _prompt_stale_question(pending, age_seconds)  # type: ignore[arg-type]
+            return
+
+        if is_followup(text):
+            post_chunks(thread, explain_followup(pending, "", text))
+            return
+
         _grade(thread, phone, pending, text, user)
         return
 
@@ -356,6 +442,19 @@ def _give_solution(thread: Thread, phone: str) -> None:
         return
     db.set_pending(phone, None, None, drill_remaining=0)
     thread.post("Send *drill* when you want the next mock.")
+
+
+def _skip_question(thread: Thread, phone: str) -> None:
+    user = db.get_user(phone)
+    if not user or not user.get("pending_question"):
+        thread.post("No active question to skip. Send *drill* to start one!")
+        return
+    db.clear_pending(phone)
+    thread.post(
+        "⏭ *Question skipped!* No score deduction.\n\n"
+        "Send *drill* for a fresh question, or tap below to switch mood:",
+        actions=SWITCH_MOOD_BUTTONS,
+    )
 
 
 # ── Hint system ────────────────────────────────────────────────────
