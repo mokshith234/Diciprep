@@ -195,9 +195,20 @@ def register(cx: Caspian) -> None:
     """Register channel-agnostic handlers so both WhatsApp and Telegram work."""
 
     @cx.on_action()
-    def on_action(thread: Thread, msg: Message, ctx: HandlerContext) -> None:
-        data = getattr(ctx, "data", None) or getattr(msg, "text", "") or ""
-        handle_text(thread, msg, str(data))
+    def on_action(thread: Thread, msg: Any, ctx: HandlerContext) -> None:
+        data = (
+            getattr(msg, "data", None)
+            or getattr(ctx, "data", None)
+            or getattr(msg, "text", None)
+            or ""
+        )
+        if not data and hasattr(msg, "raw") and isinstance(msg.raw, dict):
+            data = str(msg.raw.get("data") or "")
+        data = str(data).strip()
+        log.info("Action button tapped: data=%r from %s", data, _phone(msg))
+        if not data:
+            return
+        handle_text(thread, msg, data)
 
     @cx.on_message({"overlap": "queue"})
     def on_message(thread: Thread, msg: Message, ctx: HandlerContext) -> None:
