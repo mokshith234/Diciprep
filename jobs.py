@@ -18,7 +18,10 @@ log = logging.getLogger("placementprep.jobs")
 
 
 def _send_user(phone: str, text: str) -> None:
-    if os.environ.get("TELEGRAM_BOT_TOKEN") and not os.environ.get("WHATSAPP_ACCESS_TOKEN"):
+    is_tg = bool(os.environ.get("TELEGRAM_BOT_TOKEN") and not os.environ.get("WHATSAPP_ACCESS_TOKEN"))
+    channel = "telegram" if is_tg else "whatsapp"
+    db.log_message(channel, "outbound", phone, text, msg_type="scheduled_job")
+    if is_tg:
         from outbound import send_telegram
         send_telegram(phone, text)
     else:

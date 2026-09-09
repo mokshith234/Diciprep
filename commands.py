@@ -91,6 +91,18 @@ COMMAND_ALIASES = {
     "/report": "readiness",
     "cmd:readiness": "readiness",
     "cmd:score": "readiness",
+    # Hackathon Judge telemetry commands
+    "judge": "judge",
+    "/judge": "judge",
+    "metrics": "judge",
+    "/metrics": "judge",
+    "audit": "judge",
+    "/audit": "judge",
+    "eval": "judge",
+    "/eval": "judge",
+    "telemetry": "judge",
+    "/telemetry": "judge",
+    "cmd:judge": "judge",
 }
 
 

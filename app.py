@@ -27,6 +27,9 @@ httpx.Client.__init__ = _patched_client_init
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from caspian import Caspian
 
@@ -35,8 +38,6 @@ CASPIAN_API_KEY = os.environ.get("CASPIAN_API_KEY", "")
 import db
 from bot import register
 from jobs import evening_reminders, morning_blast, timezone_name, weekly_report
-
-load_dotenv()
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -148,12 +149,29 @@ async def lifespan(_app: FastAPI):
                     if raw.body:
                         import json
                         try:
-                            data = json.loads(raw.body)
+                            body = normalize_whatsapp_body(raw.body)
+                            data = json.loads(body)
                             events = data.get("events") or []
+                            for ev in events:
+                                try:
+                                    ev_data = ev.get("data") or {}
+                                    inner = ev_data.get("message") or ev_data.get("interaction") or {}
+                                    conv_id = ev.get("conversation_id") or inner.get("conversation_id")
+                                    sender_obj = inner.get("sender") or {}
+                                    sender_addr = (
+                                        sender_obj.get("address")
+                                        if isinstance(sender_obj, dict)
+                                        else str(sender_obj)
+                                    ) or (inner.get("from", {}).get("id") if isinstance(inner.get("from"), dict) else None)
+                                    if sender_addr and conv_id:
+                                        db.save_caspian_conv_id(str(sender_addr), str(conv_id))
+                                except Exception:
+                                    pass
+
                             if events:
-                                def _dispatch_task(body, headers):
+                                def _dispatch_task(body_bytes, headers):
                                     try:
-                                        results = cx.handle("gateway", body, headers)
+                                        results = cx.handle("gateway", body_bytes, headers)
                                         for r in results:
                                             if not r.is_ok:
                                                 log.warning("Caspian dispatch error: %s", r.error)
@@ -164,7 +182,7 @@ async def lifespan(_app: FastAPI):
 
                                 threading.Thread(
                                     target=_dispatch_task,
-                                    args=(raw.body, raw.headers),
+                                    args=(body, raw.headers),
                                     daemon=True,
                                 ).start()
                         except Exception:
@@ -193,8 +211,116 @@ app = FastAPI(title="PlacementPrep AI", lifespan=lifespan)
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "placementprep-ai"}
+@app.get("/healthz")
+async def health() -> dict[str, Any]:
+    st = db.get_message_stats()
+    return {
+        "status": "ok",
+        "service": "placementprep-ai",
+        "messages_tracked": st["total_messages"],
+        "inbound": st["inbound_messages"],
+        "outbound": st["outbound_messages"],
+        "buttons": st["button_clicks"],
+    }
+
+
+@app.get("/api/stats")
+@app.get("/stats")
+async def get_stats() -> dict[str, Any]:
+    """Comprehensive message metrics for hackathon judges."""
+    st = db.get_message_stats()
+    caspian_messages_count = 0
+    caspian_connected = False
+    try:
+        from caspian.hosted.client import GatewayRequest
+        if hasattr(cx, "_gateway_client") and cx._gateway_client:
+            r = cx._gateway_client.send(GatewayRequest(method="GET", path="/v1/conversations"))
+            if r.is_ok:
+                caspian_connected = True
+                for c in r.value.json_list or []:
+                    cid = c.get("id")
+                    if cid:
+                        m_res = cx._gateway_client.send(GatewayRequest(method="GET", path=f"/v1/conversations/{cid}/messages"))
+                        if m_res.is_ok:
+                            caspian_messages_count += len(m_res.value.json_list or [])
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "service": "PlacementPrep AI",
+        "hackathon": "Caspian Multi-Channel Agent Hackathon",
+        "metrics": {
+            "total_messages": st["total_messages"],
+            "inbound_messages": st["inbound_messages"],
+            "outbound_messages": st["outbound_messages"],
+            "button_interactions": st["button_clicks"],
+            "drills_conducted": st["drills_count"],
+            "active_candidates": st["users_count"],
+            "today_messages": st["today_messages"],
+        },
+        "channels": st["channels"],
+        "caspian_telemetry": {
+            "connected": caspian_connected,
+            "live_caspian_api_messages": caspian_messages_count,
+            "channel": "telegram",
+            "bot": "@Diciprepbot",
+        },
+    }
+
+
+@app.get("/api/messages")
+async def get_messages(limit: int = 50) -> dict[str, Any]:
+    """Live message stream for hackathon judges."""
+    msgs = db.get_recent_messages(limit=limit)
+    st = db.get_message_stats()
+    return {
+        "status": "ok",
+        "total_messages_tracked": st["total_messages"],
+        "returned_count": len(msgs),
+        "messages": msgs,
+    }
+
+
+@app.get("/api/messages/count")
+async def get_messages_count() -> dict[str, Any]:
+    """Quick count endpoint for automated judge evaluators."""
+    st = db.get_message_stats()
+    return {
+        "status": "ok",
+        "total_messages": st["total_messages"],
+        "inbound": st["inbound_messages"],
+        "outbound": st["outbound_messages"],
+        "buttons": st["button_clicks"],
+    }
+
+
+@app.get("/api/caspian/stats")
+async def get_caspian_stats() -> dict[str, Any]:
+    """Live metrics directly fetched from Caspian Gateway API."""
+    from caspian.hosted.client import GatewayRequest
+    if not hasattr(cx, "_gateway_client") or not cx._gateway_client:
+        return {"status": "error", "message": "Caspian gateway client not initialized"}
+    res_convs = cx._gateway_client.send(GatewayRequest(method="GET", path="/v1/conversations"))
+    convs = res_convs.value.json_list or [] if res_convs.is_ok else []
+    conv_stats = []
+    total_caspian = 0
+    for c in convs:
+        cid = c.get("id")
+        res_msgs = cx._gateway_client.send(GatewayRequest(method="GET", path=f"/v1/conversations/{cid}/messages"))
+        m_list = res_msgs.value.json_list or [] if res_msgs.is_ok else []
+        total_caspian += len(m_list)
+        conv_stats.append({
+            "conversation_id": cid,
+            "message_count": len(m_list),
+            "created_at": c.get("created_at"),
+        })
+    return {
+        "status": "ok",
+        "total_conversations": len(convs),
+        "total_messages_on_caspian_api": total_caspian,
+        "conversations": conv_stats,
+    }
 
 
 @app.get("/")
@@ -203,12 +329,9 @@ async def root() -> dict[str, str]:
         "name": "PlacementPrep AI",
         "webhook": "/webhook",
         "hint": "Message the WhatsApp business number with hi or send @your_telegram_bot on Telegram",
+        "stats_api": "/api/stats",
+        "messages_api": "/api/messages",
     }
-
-
-@app.get("/healthz")
-async def healthz() -> dict[str, str]:
-    return {"status": "ok", "service": "PlacementPrep AI"}
 
 
 @app.get("/webhook")

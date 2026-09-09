@@ -55,7 +55,19 @@ def _q(sql: str) -> str:
     return sql
 
 
+_initialized = False
+
+
+def ensure_db() -> None:
+    global _initialized
+    if not _initialized:
+        init_db()
+        _initialized = True
+
+
 def init_db() -> None:
+    global _initialized
+    _initialized = True
     users_sql = """
     CREATE TABLE IF NOT EXISTS users (
         phone_number VARCHAR(128) PRIMARY KEY,
@@ -109,9 +121,41 @@ def init_db() -> None:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
+    messages_sql = """
+    CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel VARCHAR(32) DEFAULT 'telegram',
+        direction VARCHAR(16),
+        msg_type VARCHAR(32) DEFAULT 'text',
+        sender_id VARCHAR(128),
+        text_preview TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """
+    if _is_postgres():
+        messages_sql = """
+        CREATE TABLE IF NOT EXISTS messages (
+            id SERIAL PRIMARY KEY,
+            channel VARCHAR(32) DEFAULT 'telegram',
+            direction VARCHAR(16),
+            msg_type VARCHAR(32) DEFAULT 'text',
+            sender_id VARCHAR(128),
+            text_preview TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    caspian_conv_sql = """
+    CREATE TABLE IF NOT EXISTS caspian_conversations (
+        sender_id VARCHAR(128) PRIMARY KEY,
+        conversation_id VARCHAR(128),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """
     with get_conn() as conn:
         conn.execute(users_sql)
         conn.execute(drills_sql)
+        conn.execute(messages_sql)
+        conn.execute(caspian_conv_sql)
 
         # -- migrate: add new columns if missing on existing databases
         cols_to_add = [
@@ -612,3 +656,216 @@ def get_readiness_profile(phone: str) -> dict[str, Any]:
         "accuracy": st.get("accuracy", 0.0),
         "difficulty": user.get("difficulty") or "easy",
     }
+
+
+# ── Message Logging & Hackathon Telemetry ──────────────────────────
+
+def log_message(
+    channel: str,
+    direction: str,
+    sender_id: str,
+    text: str,
+    msg_type: str = "text",
+) -> int:
+    """Log an inbound or outbound message for message tracking and hackathon audit."""
+    ensure_db()
+    preview = (str(text or "").strip())[:200]
+    clean_sender = str(sender_id or "").strip()
+    clean_channel = str(channel or "telegram").lower()
+    clean_dir = str(direction or "outbound").lower()
+    clean_type = str(msg_type or "text").lower()
+
+    try:
+        with get_conn() as conn:
+            cursor = conn.execute(
+                _q(
+                    "INSERT INTO messages (channel, direction, msg_type, sender_id, text_preview) "
+                    "VALUES (?, ?, ?, ?, ?)"
+                ),
+                (clean_channel, clean_dir, clean_type, clean_sender, preview),
+            )
+            return cursor.lastrowid or 1
+    except Exception:
+        log.exception("Failed to log message to database")
+        return 0
+
+
+def get_message_stats() -> dict[str, Any]:
+    """Calculate aggregated message metrics for hackathon judges & telemetry."""
+    ensure_db()
+    try:
+        with get_conn() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            inbound = conn.execute(
+                _q("SELECT COUNT(*) FROM messages WHERE direction = ?"), ("inbound",)
+            ).fetchone()[0]
+            outbound = conn.execute(
+                _q("SELECT COUNT(*) FROM messages WHERE direction = ?"), ("outbound",)
+            ).fetchone()[0]
+            button_clicks = conn.execute(
+                _q("SELECT COUNT(*) FROM messages WHERE msg_type = ?"), ("button_click",)
+            ).fetchone()[0]
+            telegram_count = conn.execute(
+                _q("SELECT COUNT(*) FROM messages WHERE channel = ?"), ("telegram",)
+            ).fetchone()[0]
+            whatsapp_count = conn.execute(
+                _q("SELECT COUNT(*) FROM messages WHERE channel = ?"), ("whatsapp",)
+            ).fetchone()[0]
+            users_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            drills_count = conn.execute("SELECT COUNT(*) FROM drills").fetchone()[0]
+
+            today_date = date.today().isoformat()
+            today_count = conn.execute(
+                _q("SELECT COUNT(*) FROM messages WHERE DATE(created_at) = ?"), (today_date,)
+            ).fetchone()[0]
+
+            return {
+                "total_messages": int(total),
+                "inbound_messages": int(inbound),
+                "outbound_messages": int(outbound),
+                "button_clicks": int(button_clicks),
+                "drills_count": int(drills_count),
+                "users_count": int(users_count),
+                "today_messages": int(today_count),
+                "channels": {
+                    "telegram": int(telegram_count),
+                    "whatsapp": int(whatsapp_count),
+                },
+            }
+    except Exception:
+        log.exception("Failed to compute message stats")
+        return {
+            "total_messages": 0,
+            "inbound_messages": 0,
+            "outbound_messages": 0,
+            "button_clicks": 0,
+            "drills_count": 0,
+            "users_count": 0,
+            "today_messages": 0,
+            "channels": {"telegram": 0, "whatsapp": 0},
+        }
+
+
+def get_recent_messages(limit: int = 50) -> list[dict[str, Any]]:
+    """Retrieve the most recent messages for the hackathon audit trail."""
+    ensure_db()
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                _q(
+                    "SELECT id, channel, direction, msg_type, sender_id, text_preview, created_at "
+                    "FROM messages ORDER BY id DESC LIMIT ?"
+                ),
+                (limit,),
+            ).fetchall()
+            return [
+                {
+                    "id": r[0] if isinstance(r, tuple) else r["id"],
+                    "channel": r[1] if isinstance(r, tuple) else r["channel"],
+                    "direction": r[2] if isinstance(r, tuple) else r["direction"],
+                    "msg_type": r[3] if isinstance(r, tuple) else r["msg_type"],
+                    "sender_id": r[4] if isinstance(r, tuple) else r["sender_id"],
+                    "text_preview": r[5] if isinstance(r, tuple) else r["text_preview"],
+                    "text": r[5] if isinstance(r, tuple) else r["text_preview"],
+                    "created_at": str(r[6] if isinstance(r, tuple) else r["created_at"]),
+                }
+                for r in rows
+            ]
+    except Exception:
+        log.exception("Failed to fetch recent messages")
+        return []
+
+
+def save_caspian_conv_id(sender_id: str, conv_id: str) -> None:
+    """Map a student address/phone to their Caspian Gateway conversation ID."""
+    if not sender_id or not conv_id:
+        return
+    ensure_db()
+    try:
+        with get_conn() as conn:
+            if _is_postgres():
+                conn.execute(
+                    "INSERT INTO caspian_conversations (sender_id, conversation_id, updated_at) "
+                    "VALUES (%s, %s, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT (sender_id) DO UPDATE SET conversation_id = EXCLUDED.conversation_id, updated_at = CURRENT_TIMESTAMP",
+                    (str(sender_id), str(conv_id)),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO caspian_conversations (sender_id, conversation_id, updated_at) "
+                    "VALUES (?, ?, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(sender_id) DO UPDATE SET conversation_id = excluded.conversation_id, updated_at = CURRENT_TIMESTAMP",
+                    (str(sender_id), str(conv_id)),
+                )
+    except Exception:
+        log.exception("Failed to save Caspian conv_id for %s", sender_id)
+
+
+def get_caspian_conv_id(sender_id: str) -> str | None:
+    """Get the active Caspian Gateway conversation ID for this student."""
+    if not sender_id:
+        return None
+    ensure_db()
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                _q("SELECT conversation_id FROM caspian_conversations WHERE sender_id = ?"),
+                (str(sender_id),),
+            ).fetchone()
+            if row:
+                return row[0] if isinstance(row, tuple) else row["conversation_id"]
+    except Exception:
+        log.exception("Failed to lookup Caspian conv_id for %s", sender_id)
+    return None
+
+
+def get_any_caspian_conv_id() -> str | None:
+    """Get the latest known Caspian conversation ID as fallback."""
+    ensure_db()
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT conversation_id FROM caspian_conversations ORDER BY updated_at DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                return row[0] if isinstance(row, tuple) else row["conversation_id"]
+    except Exception:
+        pass
+    return None
+
+
+def get_sender_for_conv(conv_id: str) -> str | None:
+    """Get student phone/ID (e.g. Telegram chat ID) for a Caspian conversation ID."""
+    if not conv_id:
+        return None
+    ensure_db()
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                _q("SELECT sender_id FROM caspian_conversations WHERE conversation_id = ? LIMIT 1"),
+                (str(conv_id),),
+            ).fetchone()
+            if row:
+                return str(row[0] if isinstance(row, tuple) else row["sender_id"])
+    except Exception:
+        pass
+    return None
+
+
+def get_latest_telegram_user() -> str | None:
+    """Find the most recent Telegram user chat_id."""
+    ensure_db()
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT phone_number FROM users WHERE phone_number GLOB '[0-9]*' ORDER BY updated_at DESC LIMIT 1"
+                if not _is_postgres()
+                else "SELECT phone_number FROM users WHERE phone_number ~ '^[0-9]+$' ORDER BY updated_at DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                return str(row[0] if isinstance(row, tuple) else row["phone_number"])
+    except Exception:
+        pass
+    return None
+
+

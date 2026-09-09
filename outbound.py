@@ -71,16 +71,18 @@ def send_telegram(chat_id: str, text: str, actions=None) -> None:
         reply_markup = {"inline_keyboard": keyboard}
 
     parts = chunk_text(text)
+    if not parts and reply_markup:
+        parts = [" "]
     for i, part in enumerate(parts):
         payload: dict = {"chat_id": chat_id, "text": part, "parse_mode": "Markdown"}
         if i == len(parts) - 1 and reply_markup:
             payload["reply_markup"] = reply_markup
         try:
-            r = httpx.post(url, json=payload, timeout=30)
-            if r.status_code == 400 and "can't parse entities" in r.text:
+            r = httpx.post(url, json=payload, timeout=30, verify=False)
+            if r.status_code == 400 and ("parse" in r.text.lower() or "entity" in r.text.lower()):
                 # Markdown entity syntax error in LLM output: fallback to plain text
                 payload.pop("parse_mode", None)
-                r = httpx.post(url, json=payload, timeout=30)
+                r = httpx.post(url, json=payload, timeout=30, verify=False)
             if r.status_code >= 400:
                 log.error("Telegram send failed %s %s", r.status_code, r.text)
         except httpx.HTTPError:
@@ -94,7 +96,7 @@ def send_telegram_typing(chat_id: str) -> None:
         return
     url = f"https://api.telegram.org/bot{token}/sendChatAction"
     try:
-        httpx.post(url, json={"chat_id": chat_id, "action": "typing"}, timeout=5)
+        httpx.post(url, json={"chat_id": chat_id, "action": "typing"}, timeout=5, verify=False)
     except Exception:
         pass
 
@@ -106,26 +108,24 @@ def answer_telegram_callback(callback_id: str) -> None:
         return
     url = f"https://api.telegram.org/bot{token}/answerCallbackQuery"
     try:
-        httpx.post(url, json={"callback_query_id": str(callback_id)}, timeout=5)
+        httpx.post(url, json={"callback_query_id": str(callback_id)}, timeout=5, verify=False)
     except Exception:
         pass
 
 
 def post_chunks(thread, text: str, actions=None) -> None:
-    tid = str(getattr(thread, "thread_id", ""))
-    if tid.startswith("telegram:") and actions:
-        chat_id = tid.split(":", 1)[-1]
-        token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-        if token and chat_id:
-            try:
-                send_telegram(chat_id, text, actions=actions)
-                return
-            except Exception:
-                pass
-
     parts = chunk_text(text)
-    for i, part in enumerate(parts):
-        if i == len(parts) - 1 and actions:
-            thread.post(part, actions=actions)
-        else:
-            thread.post(part)
+    if not parts and actions:
+        parts = [" "]
+    if hasattr(thread, "post") and callable(thread.post):
+        for i, part in enumerate(parts):
+            if i == len(parts) - 1 and actions:
+                thread.post(part, actions=actions)
+            else:
+                thread.post(part)
+    else:
+        # Fallback if thread object has no post method
+        tid = str(getattr(thread, "thread_id", ""))
+        chat_id = tid.split(":", 1)[-1] if ":" in tid else tid
+        send_telegram(chat_id, text, actions=actions)
+
