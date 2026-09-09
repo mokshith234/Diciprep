@@ -155,9 +155,9 @@ async def lifespan(_app: FastAPI):
                             for ev in events:
                                 try:
                                     ev_data = ev.get("data") or {}
-                                    inner = ev_data.get("message") or ev_data.get("interaction") or {}
-                                    conv_id = ev.get("conversation_id") or inner.get("conversation_id")
-                                    sender_obj = inner.get("sender") or {}
+                                    inner = ev_data.get("message") or ev_data.get("interaction") or ev_data
+                                    conv_id = ev_data.get("conversation_id") or ev.get("conversation_id") or inner.get("conversation_id")
+                                    sender_obj = inner.get("sender") or ev_data.get("sender") or {}
                                     sender_addr = (
                                         sender_obj.get("address")
                                         if isinstance(sender_obj, dict)
@@ -205,6 +205,7 @@ async def lifespan(_app: FastAPI):
 
     stop_caspian.set()
     scheduler.shutdown(wait=False)
+
 
 
 app = FastAPI(title="PlacementPrep AI", lifespan=lifespan)

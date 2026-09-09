@@ -216,13 +216,36 @@ FALLBACK_MSG = (
 MAX_HINTS = 2
 
 
-# Patch GatewayEventParser._action to safely parse Telegram and WhatsApp callback query data,
+# Patch GatewayEventParser._normalise and _action to safely parse Telegram and WhatsApp callback query data,
 # preserve interaction_id for instant ack, and retain raw payload.
+# CRITICAL CASPIAN FIX: Caspian gateway sends interaction.received events with
+# payload directly in `data` (with fields `value`, `conversation_id`, `sender`), NOT nested under `data.interaction`.
+# Standard Caspian SDK drops these events because `data.get("interaction")` is None.
 try:
     from caspian.hosted.inbound import GatewayEventParser
     from caspian.core.types import Action
 
+    _orig_gateway_normalise = GatewayEventParser._normalise
     _orig_gateway_action = GatewayEventParser._action
+
+    def _robust_gateway_normalise(self, obj: dict) -> dict:
+        raw_type = str(obj.get("type", ""))
+        data = obj.get("data")
+        if raw_type == "interaction.received" and isinstance(data, dict):
+            inner = dict(data.get("interaction") or data.get("message") or data)
+            if "value" in inner and "data" not in inner:
+                inner["data"] = inner["value"]
+            channel = str(inner.get("channel") or data.get("channel") or "telegram")
+            conv_id = str(inner.get("conversation_id") or data.get("conversation_id") or "")
+            inner["channel"] = channel
+            inner["conversation_id"] = conv_id
+            return {
+                "type": "action",
+                "channel": channel,
+                "conversation_id": conv_id,
+                "action": inner,
+            }
+        return _orig_gateway_normalise(self, obj)
 
     def _robust_gateway_action(self, thread_id, a):
         if not isinstance(a, dict):
@@ -264,9 +287,11 @@ try:
             )
         ]
 
+    GatewayEventParser._normalise = _robust_gateway_normalise
     GatewayEventParser._action = _robust_gateway_action
 except Exception as _patch_err:
-    log.warning("Failed to patch GatewayEventParser._action: %s", _patch_err)
+    log.warning("Failed to patch GatewayEventParser: %s", _patch_err)
+
 
 
 def register(cx: Caspian) -> None:

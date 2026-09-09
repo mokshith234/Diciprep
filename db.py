@@ -677,14 +677,21 @@ def log_message(
 
     try:
         with get_conn() as conn:
-            cursor = conn.execute(
-                _q(
+            if _is_postgres():
+                cursor = conn.execute(
                     "INSERT INTO messages (channel, direction, msg_type, sender_id, text_preview) "
-                    "VALUES (?, ?, ?, ?, ?)"
-                ),
-                (clean_channel, clean_dir, clean_type, clean_sender, preview),
-            )
-            return cursor.lastrowid or 1
+                    "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                    (clean_channel, clean_dir, clean_type, clean_sender, preview),
+                )
+                row = cursor.fetchone()
+                return (row[0] if isinstance(row, tuple) else row.get("id", 1)) if row else 1
+            else:
+                cursor = conn.execute(
+                    "INSERT INTO messages (channel, direction, msg_type, sender_id, text_preview) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (clean_channel, clean_dir, clean_type, clean_sender, preview),
+                )
+                return cursor.lastrowid or 1
     except Exception:
         log.exception("Failed to log message to database")
         return 0

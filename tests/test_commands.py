@@ -215,3 +215,43 @@ def test_fix_and_readiness_commands():
     assert parse_fix_command("random text") is None
 
 
+def test_caspian_interaction_event_parsing():
+    import json
+    import bot  # triggers the GatewayEventParser monkey patch
+    from caspian.hosted.inbound import GatewayEventParser
+    from caspian.core.ports import RawInbound
+
+    payload = {
+        "events": [{
+            "id": "evt_test123",
+            "seq": 25819,
+            "type": "interaction.received",
+            "occurred_at": "2026-09-09T13:18:19.552068",
+            "data": {
+                "customer_id": "cus_4ecb3725d2c2756c01d155df",
+                "agent_id": "agt_87030bc689b156eb67ed9932",
+                "connection_id": "conn_d1a8e94c25670b127d337bed",
+                "conversation_id": "conv_610496c1963bd658d36ca088",
+                "value": "drill dsa",
+                "source_message": None,
+                "sender": {
+                    "address": "1162882541",
+                    "name": "Mokshith Reddy",
+                },
+            },
+        }]
+    }
+
+    parser = GatewayEventParser()
+    res = parser.parse(RawInbound(body=json.dumps(payload).encode("utf-8"), headers={}))
+    assert res.is_ok
+    events = res.value
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "action"
+    assert ev.data == "drill dsa"
+    assert ev.sender == "1162882541"
+    assert "conv_610496c1963bd658d36ca088" in str(ev.thread_id)
+
+
+
