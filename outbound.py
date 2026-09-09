@@ -69,6 +69,17 @@ def send_telegram(chat_id: str, text: str, actions=None) -> None:
             data = getattr(btn, "data", label)
             keyboard.append([{"text": str(label)[:64], "callback_data": str(data)[:64]}])
         reply_markup = {"inline_keyboard": keyboard}
+    else:
+        # Persistent Telegram Reply Keyboard — when pressed, text sends from the user's side
+        reply_markup = {
+            "keyboard": [
+                [{"text": "⚡ Mock Interview"}, {"text": "📄 AI Resume Scanner"}],
+                [{"text": "📊 Readiness Score"}, {"text": "🎓 Menu"}],
+                [{"text": "💡 Hint"}, {"text": "📜 Solution"}, {"text": "⏭️ Skip"}],
+            ],
+            "resize_keyboard": True,
+            "is_persistent": True,
+        }
 
     parts = chunk_text(text)
     if not parts and reply_markup:

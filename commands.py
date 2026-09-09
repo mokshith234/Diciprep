@@ -103,6 +103,13 @@ COMMAND_ALIASES = {
     "telemetry": "judge",
     "/telemetry": "judge",
     "cmd:judge": "judge",
+    # Reply Keyboard & Natural Language Actions
+    "mock interview": "drill",
+    "ai resume scanner": "resume",
+    "resume scanner": "resume",
+    "scan resume": "resume",
+    "readiness score": "readiness",
+    "scorecard": "readiness",
 }
 
 
@@ -115,9 +122,16 @@ def parse_command(text: str) -> str | None:
     key = norm.lower()
     if key in COMMAND_ALIASES:
         return COMMAND_ALIASES[key]
+    # Strip leading non-alphanumeric symbols/emojis (e.g. "⚡ Mock Interview" -> "mock interview")
+    clean = re.sub(r"^[^\w/]+", "", norm).strip().lower()
+    if clean in COMMAND_ALIASES:
+        return COMMAND_ALIASES[clean]
     first = key.split()[0] if key else ""
     if first.startswith("/") and first in COMMAND_ALIASES:
         return COMMAND_ALIASES[first]
+    clean_first = clean.split()[0] if clean else ""
+    if clean_first in COMMAND_ALIASES:
+        return COMMAND_ALIASES[clean_first]
     return None
 
 

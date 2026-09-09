@@ -522,20 +522,68 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
             "`3rd year CSE. Strong in Java, C++, Python, DSA, DBMS.\n"
             "Built a Fullstack MERN e-commerce app and a Redis caching layer.\n"
             "Targeting SDE-1 backend roles at Tier-1 companies.`\n\n"
-            "📋 *Simply paste your resume or summary below to get started!* 👇"
+            "👇 *Or tap a button below to instantly analyze a sample profile:*",
+            actions=(
+                make_button("📋 Analyze Sample SDE", "sample_resume:sde"),
+                make_button("📊 Analyze Sample DS", "sample_resume:ds"),
+                make_button("⚙️ Analyze Sample Core CS", "sample_resume:core"),
+                make_button("❌ Cancel / Menu", "cmd:menu"),
+            ),
         )
+        return
+
+    # ── 1-Click Sample Resume Evaluation ──
+    if text.strip().lower().startswith("sample_resume:"):
+        db.set_onboarding_step(phone, None)
+        profile_type = text.split(":", 1)[-1].strip().lower()
+        if profile_type == "ds":
+            sample_text = (
+                "Final year Data Science student. Proficient in Python, SQL, Pandas, NumPy, Scikit-Learn, "
+                "and exploratory data analysis. Built machine learning models for customer churn prediction "
+                "and sentiment analysis using NLP. Familiar with statistical hypothesis testing, regression, and PowerBI. "
+                "Targeting Data Analyst / Junior ML Engineer roles."
+            )
+            role = "Data Scientist"
+        elif profile_type == "core":
+            sample_text = (
+                "Computer Science undergraduate. Strong in C, C++, Operating Systems (Processes, Threads, Deadlocks, Virtual Memory), "
+                "DBMS (SQL, Indexing, Transactions, Normalization), and Computer Networks (TCP/IP, OSI, Routing, Sockets). "
+                "Built a multi-threaded web server in C++. Targeting Core Systems & Infrastructure roles."
+            )
+            role = "Systems Engineer"
+        else:
+            sample_text = (
+                "Pre-final year B.Tech CSE. Strong in Java, C++, Python, Data Structures & Algorithms, "
+                "Object-Oriented Programming, and DBMS. Built a Fullstack MERN e-commerce application "
+                "with Redis caching and JWT authentication. Experienced with Git, Docker, and REST APIs. "
+                "Targeting SDE-1 backend roles at top product companies."
+            )
+            role = "Software Development Engineer"
+
+        thread.post(f"📋 *Analyzing Sample {profile_type.upper()} Profile:*\n_{sample_text}_\n")
+        _onboard_resume(thread, phone, sample_text, target_role=role)
         return
 
     # ── Quick target profile pack selection (anytime button tap) ──
     if text.strip().lower().startswith("tp:"):
+        db.set_onboarding_step(phone, None)
         _onboard_target_profile(thread, phone, text, user)
         return
 
     # ── Immediate Weakness Fix Action (1-click from resume audit or scorecard) ──
     fix_topic = parse_fix_command(text)
     if fix_topic:
+        db.set_onboarding_step(phone, None)
         _handle_fix_topic(thread, phone, fix_topic, user)
         return
+
+    # ── Cancel onboarding if user sends any explicit command or action button ──
+    cmd_check = parse_command(text)
+    if cmd_check or text.startswith(("cmd:", "track:", "onboard:", "tp:", "fix:", "sample_resume:", "/")):
+        if (user or {}).get("onboarding_step"):
+            db.set_onboarding_step(phone, None)
+            if user:
+                user["onboarding_step"] = None
 
     # ── Onboarding state machine (multi-step AI flow) ──
     onboarding_step = (user or {}).get("onboarding_step")
@@ -722,14 +770,22 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
     if cmd == "summary":
         _show_summary(thread, phone, user)
         return
-    # "resume" command without content — show instructions
+    # "resume" command without content — show instructions & sample buttons
     if cmd == "resume":
+        db.set_onboarding_step(phone, "awaiting_resume")
         thread.post(
             "📄 *AI Resume Scoring & Skill Gap Diagnostic*\n\n"
-            "Send your resume text, skills, or projects like this:\n"
+            "Drop your resume text, skills, or projects like this:\n"
             "`resume: 3rd year CSE, built fullstack app with React/Node/Redis, skilled in Java, DSA, OS, DBMS.`\n\n"
             "I will evaluate your absolute score (0-100), spot interview vulnerabilities ('The Grill List'), "
-            "and provide 1-click weakness repair buttons!"
+            "and provide 1-click weakness repair buttons!\n\n"
+            "👇 *Or tap a button below to instantly analyze a sample profile:*",
+            actions=(
+                make_button("📋 Analyze Sample SDE", "sample_resume:sde"),
+                make_button("📊 Analyze Sample DS", "sample_resume:ds"),
+                make_button("⚙️ Analyze Sample Core CS", "sample_resume:core"),
+                make_button("❌ Cancel / Menu", "cmd:menu"),
+            ),
         )
         return
     # "switch" command — already handled above by parse_switch_command,
@@ -791,6 +847,16 @@ def _safe_get_user(phone: str) -> dict | None:
         return None
 
 
+def _make_mock_msg(phone: str, thread: Thread, text_val: str) -> Any:
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        sender=phone,
+        thread_id=getattr(thread, "thread_id", f"telegram:{phone}"),
+        text=text_val,
+        raw={},
+    )
+
+
 # ── Onboarding state machine ──────────────────────────────────────
 
 def _handle_onboarding(thread: Thread, phone: str, text: str, user: dict | None, step: str) -> None:
@@ -798,28 +864,11 @@ def _handle_onboarding(thread: Thread, phone: str, text: str, user: dict | None,
 
     Steps: awaiting_resume → awaiting_company → awaiting_role → awaiting_timeline → done
     """
-    # Allow explicit commands to break out of onboarding
+    # Allow ANY explicit command or button payload to break out of onboarding
     cmd = parse_command(text)
-    if cmd in ("start", "clear", "switch", "help", "drill"):
+    if cmd or text.startswith(("cmd:", "track:", "onboard:", "tp:", "fix:", "sample_resume:", "/")):
         db.set_onboarding_step(phone, None)
-        user_name = (user or {}).get("name") or ""
-        if cmd == "start":
-            thread.post(build_welcome_message(user_name), actions=ONBOARDING_BUTTONS)
-        elif cmd == "clear":
-            db.force_clear_all_state(phone)
-            thread.post(
-                "🧹 *Session cleared!* Starting fresh.",
-                actions=ONBOARDING_BUTTONS,
-            )
-        elif cmd == "help":
-            thread.post(HELP)
-        elif cmd == "drill":
-            _start_drill(thread, phone)
-        elif cmd == "switch":
-            thread.post(
-                "🔄 *Switched!* Pick what to prep:",
-                actions=SWITCH_MOOD_BUTTONS,
-            )
+        _handle_text_inner(thread, _make_mock_msg(phone, thread, text), text)
         return
 
     if step == "awaiting_resume":
@@ -839,22 +888,36 @@ def _handle_onboarding(thread: Thread, phone: str, text: str, user: dict | None,
         thread.post(build_welcome_message(user_name), actions=ONBOARDING_BUTTONS)
 
 
-def _onboard_resume(thread: Thread, phone: str, text: str) -> None:
+def _onboard_resume(thread: Thread, phone: str, text: str, target_role: str | None = None) -> None:
     """Flagship Feature: Deep Resume Diagnostic, Absolute Scoring, Skill Gap Analysis & 1-Click Fix Options."""
-    # Ignore very short messages (probably accidental)
-    if len(text.strip()) < 15:
+    clean = text.strip()
+    cmd = parse_command(clean)
+    if cmd or clean.startswith(("cmd:", "track:", "onboard:", "tp:", "fix:", "sample_resume:", "/")):
+        db.set_onboarding_step(phone, None)
+        _handle_text_inner(thread, _make_mock_msg(phone, thread, clean), clean)
+        return
+
+    if len(clean) < 10:
         thread.post(
-            "📝 That seems too short! Please paste your full resume, skills list, "
-            "or project descriptions so I can analyze them properly."
+            "📝 *AI Resume & Skill Gap Scanner*\n\n"
+            "Drop your resume text, skills list, or project summary right here! 📄✨\n\n"
+            "👇 *Or tap a button below to instantly test a sample candidate profile:*",
+            actions=(
+                make_button("📋 Analyze Sample SDE", "sample_resume:sde"),
+                make_button("📊 Analyze Sample DS", "sample_resume:ds"),
+                make_button("⚙️ Analyze Sample Core CS", "sample_resume:core"),
+                make_button("❌ Cancel / Menu", "cmd:menu"),
+            ),
         )
         return
 
+    db.set_onboarding_step(phone, None)
     thread.post("🔍 *Running deep resume scoring and interview vulnerability scan...* ⏳")
 
     try:
         user = _safe_get_user(phone) or {}
-        target_role = user.get("target_role") or "Software Engineer"
-        analysis = score_and_analyze_resume(text, target_role=target_role)
+        role = target_role or user.get("target_role") or "Software Engineer"
+        analysis = score_and_analyze_resume(text, target_role=role)
 
         # Persist score and summary
         score = analysis.get("score", 65)
@@ -880,8 +943,8 @@ def _onboard_resume(thread: Thread, phone: str, text: str) -> None:
         # Deliver the flagship audit card with the fix buttons
         post_chunks(thread, analysis["message"], actions=tuple(fix_buttons))
 
-        # Move to combined single-step target selection (saves turns and tokens!)
-        db.set_onboarding_step(phone, "awaiting_target_profile")
+        # Clear onboarding step so user is never locked in
+        db.set_onboarding_step(phone, None)
         thread.post(
             "🎯 *NEXT STEP: PICK WHICH WEAKNESS TO REPAIR FIRST*\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"

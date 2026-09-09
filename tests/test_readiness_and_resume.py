@@ -72,3 +72,71 @@ def test_generate_readiness_report():
     assert "84%" in report
     assert "System Design" in report
     assert "SDE-1 / Product Company Ready" in report
+
+
+def test_resume_onboarding_breakout_and_sample_evaluation():
+    import bot
+    from caspian import Thread
+
+    class MockThread:
+        def __init__(self):
+            self.thread_id = "telegram:test_res_user"
+            self.chat_id = "test_res_user"
+            self.messages = []
+
+        def post(self, text, actions=()):
+            self.messages.append((text, actions))
+
+        def send(self, text, actions=()):
+            self.messages.append((text, actions))
+
+    class MockMsg:
+        def __init__(self, text):
+            self.sender = "test_res_user"
+            self.thread_id = "telegram:test_res_user"
+            self.text = text
+            self.raw = {}
+
+    phone = "test_res_user"
+    db.upsert_user(phone, name="Test Candidate")
+
+    # Step 1: User enters resume onboarding
+    t1 = MockThread()
+    bot.handle_text(t1, MockMsg("onboard:ai"), "onboard:ai")
+    assert db.get_user(phone)["onboarding_step"] == "awaiting_resume"
+    assert any("RESUME INTELLIGENCE" in m[0] for m in t1.messages)
+
+    # Step 2: User taps action button while awaiting_resume -> MUST break out cleanly, never say "too short"
+    t2 = MockThread()
+    bot.handle_text(t2, MockMsg("cmd:readiness"), "cmd:readiness")
+    assert db.get_user(phone)["onboarding_step"] is None
+    assert all("too short" not in m[0].lower() for m in t2.messages)
+    assert any("Readiness" in m[0] or "Diagnostic" in m[0] or "Score" in m[0] for m in t2.messages)
+
+    # Step 3: User taps 1-click sample profile evaluation
+    t3 = MockThread()
+    orig_score = bot.score_and_analyze_resume
+    bot.score_and_analyze_resume = lambda text, target_role=None: {
+        "score": 88,
+        "recommended_track": "Software Development",
+        "fix_options": ["Redis", "DSA Graphs"],
+        "message": "Sample Audit Passed! Score: 88/100",
+    }
+    try:
+        bot.handle_text(t3, MockMsg("sample_resume:sde"), "sample_resume:sde")
+        assert any("Sample" in m[0] for m in t3.messages)
+        assert any("Score: 88/100" in m[0] for m in t3.messages)
+    finally:
+        bot.score_and_analyze_resume = orig_score
+
+
+def test_reply_keyboard_phrases():
+    # Verify all phrases sent from user's side when pressing Telegram Reply Keyboard
+    assert parse_command("⚡ Mock Interview") == "drill"
+    assert parse_command("📄 AI Resume Scanner") == "resume"
+    assert parse_command("📊 Readiness Score") == "readiness"
+    assert parse_command("🎓 Menu") == "menu"
+    assert parse_command("💡 Hint") == "hint"
+    assert parse_command("📜 Solution") == "solution"
+    assert parse_command("⏭️ Skip") == "skip"
+
