@@ -418,4 +418,63 @@ def test_button_click_event_to_outbound_delivery(monkeypatch):
     assert "Hint" in sent_messages[-1]["text"]
 
 
+def test_drill_db_persistence_lifecycle(monkeypatch):
+    """Verify drill lifecycle: log_drill_started -> record_solution_revealed / record_attempt."""
+    test_phone = "+19998887777"
+    db.upsert_user(test_phone, name="Tester", track="Data Science")
+
+    # 1. Start drill: question is logged to drills table
+    q1 = "Explain bias-variance tradeoff in machine learning."
+    drill_id = db.log_drill_started(test_phone, "ML", q1)
+    assert drill_id > 0
+
+    today_drills = db.get_today_drills(test_phone)
+    assert any(d["question_text"] == q1 for d in today_drills)
+    pending_drill = [d for d in today_drills if d["question_text"] == q1][0]
+    assert pending_drill["user_response"] == "[In Progress]"
+    assert pending_drill["score"] is None
+
+    # 2. View solution: drill record is updated with solution
+    sol = "Bias is underfitting, variance is overfitting. Regularization balances both."
+    db.record_solution_revealed(test_phone, q1, sol, "ML")
+    drills_after_sol = db.get_today_drills(test_phone)
+    sol_drill = [d for d in drills_after_sol if d["question_text"] == q1][0]
+    assert sol_drill["user_response"] == "[Solution Revealed]"
+    assert sol_drill["model_feedback"] == sol
+    assert sol_drill["score"] == 0
+
+    # 3. Next question started and answered with grading
+    q2 = "What is L1 vs L2 regularization?"
+    db.log_drill_started(test_phone, "ML", q2)
+    ans2 = "L1 produces sparse weights (Lasso), L2 penalizes large weights (Ridge)."
+    feedback2 = "Verdict: Optimal! *Score:* 9/10"
+    db.record_attempt(test_phone, "ML", q2, ans2, feedback2, 9)
+
+    drills_final = db.get_today_drills(test_phone)
+    graded_drill = [d for d in drills_final if d["question_text"] == q2][0]
+    assert graded_drill["user_response"] == ans2
+    assert graded_drill["score"] == 9
+
+    # 4. Skip another question
+    q3 = "Explain dropout in deep learning."
+    db.log_drill_started(test_phone, "Deep Learning", q3)
+    db.record_drill_skipped(test_phone, q3)
+    drills_after_skip = db.get_today_drills(test_phone)
+    skip_drill = [d for d in drills_after_skip if d["question_text"] == q3][0]
+    assert skip_drill["user_response"] == "[Skipped]"
+
+    # Check stats reflect drills
+    st = db.get_message_stats()
+    assert st["drills_count"] >= 3
+
+
+def test_scalar_helper():
+    """Verify _scalar handles tuple, dict, and Row structures without KeyError."""
+    assert db._scalar((42,)) == 42
+    assert db._scalar({"count": 88}) == 88
+    assert db._scalar(None, default=0) == 0
+    assert db._scalar([]) == 0
+
+
+
 

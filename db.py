@@ -55,6 +55,24 @@ def _q(sql: str) -> str:
     return sql
 
 
+def _scalar(row: Any, default: Any = 0) -> Any:
+    """Safely extract first column value whether row is a tuple, dict (psycopg dict_row), or sqlite3.Row."""
+    if row is None:
+        return default
+    if isinstance(row, (tuple, list)):
+        return row[0] if row else default
+    if isinstance(row, dict):
+        return next(iter(row.values()), default)
+    try:
+        return row[0]
+    except Exception:
+        try:
+            return next(iter(dict(row).values()), default)
+        except Exception:
+            return default
+
+
+
 _initialized = False
 
 
@@ -174,13 +192,39 @@ def init_db() -> None:
             ("skills_summary", "TEXT DEFAULT ''"),
         ]
         if _is_postgres():
-            for col, col_def in cols_to_add:
-                conn.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {col_def}")
+            alter_clause = ", ".join(f"ADD COLUMN IF NOT EXISTS {col} {col_def}" for col, col_def in cols_to_add)
+            conn.execute(f"ALTER TABLE users {alter_clause}")
         else:
             existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
             for col, col_def in cols_to_add:
                 if col not in existing_cols:
                     conn.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
+
+        # Ensure any active pending questions in users table are tracked in drills table
+        try:
+            cur = conn.execute(
+                "SELECT phone_number, pending_topic, pending_question FROM users WHERE pending_question IS NOT NULL"
+            )
+            for pr in cur.fetchall():
+                p_phone = pr[0] if isinstance(pr, tuple) else pr.get("phone_number")
+                p_topic = (pr[1] if isinstance(pr, tuple) else pr.get("pending_topic")) or "general"
+                p_q = pr[2] if isinstance(pr, tuple) else pr.get("pending_question")
+                if p_phone and p_q:
+                    chk = conn.execute(
+                        _q("SELECT id FROM drills WHERE phone_number = ? AND question_text = ? LIMIT 1"),
+                        (p_phone, p_q),
+                    ).fetchone()
+                    if not chk:
+                        conn.execute(
+                            _q(
+                                "INSERT INTO drills (phone_number, topic, question_text, user_response, model_feedback, score) "
+                                "VALUES (?, ?, ?, '[In Progress]', NULL, NULL)"
+                            ),
+                            (p_phone, p_topic, p_q),
+                        )
+        except Exception:
+            pass
+
 
 
 def upsert_user(phone: str, name: str | None = None, track: str | None = None) -> dict[str, Any]:
@@ -403,6 +447,32 @@ def _write_streak(phone: str, streak: int, today: date) -> None:
         )
 
 
+def log_drill_started(phone: str, topic: str | None, question: str) -> int:
+    """Record a drill question as soon as it is generated for candidate."""
+    upsert_user(phone)
+    with get_conn() as conn:
+        if _is_postgres():
+            cur = conn.execute(
+                _q(
+                    """INSERT INTO drills (phone_number, topic, question_text, user_response, model_feedback, score)
+                       VALUES (?, ?, ?, '[In Progress]', NULL, NULL)
+                       RETURNING id"""
+                ),
+                (phone, topic or "general", question),
+            )
+            row = cur.fetchone()
+            return int(_scalar(row)) if row else 0
+        else:
+            cur = conn.execute(
+                _q(
+                    """INSERT INTO drills (phone_number, topic, question_text, user_response, model_feedback, score)
+                       VALUES (?, ?, ?, '[In Progress]', NULL, NULL)"""
+                ),
+                (phone, topic or "general", question),
+            )
+            return cur.lastrowid or 0
+
+
 def record_attempt(
     phone: str,
     topic: str,
@@ -411,15 +481,39 @@ def record_attempt(
     feedback: str,
     score: int | None,
 ) -> None:
+    upsert_user(phone)
     correct_inc = 1 if score is not None and score >= 7 else 0
     with get_conn() as conn:
-        conn.execute(
+        # Check if we already logged this drill question as in-progress
+        cur = conn.execute(
             _q(
-                """INSERT INTO drills (phone_number, topic, question_text, user_response, model_feedback, score)
-                   VALUES (?, ?, ?, ?, ?, ?)"""
+                """SELECT id FROM drills 
+                   WHERE phone_number = ? AND (question_text = ? OR user_response = '[In Progress]')
+                   ORDER BY id DESC LIMIT 1"""
             ),
-            (phone, topic, question, response, feedback, score),
+            (phone, question),
         )
+        row = cur.fetchone()
+        existing_id = _scalar(row) if row else None
+
+        if existing_id:
+            conn.execute(
+                _q(
+                    """UPDATE drills 
+                       SET topic = ?, question_text = ?, user_response = ?, model_feedback = ?, score = ?
+                       WHERE id = ?"""
+                ),
+                (topic, question, response, feedback, score, existing_id),
+            )
+        else:
+            conn.execute(
+                _q(
+                    """INSERT INTO drills (phone_number, topic, question_text, user_response, model_feedback, score)
+                       VALUES (?, ?, ?, ?, ?, ?)"""
+                ),
+                (phone, topic, question, response, feedback, score),
+            )
+
         conn.execute(
             _q(
                 """UPDATE users
@@ -429,6 +523,99 @@ def record_attempt(
             ),
             (correct_inc, phone),
         )
+
+
+def record_solution_revealed(
+    phone: str,
+    question: str,
+    solution: str,
+    topic: str | None = None,
+) -> None:
+    """Record when a candidate views the solution for a drill question."""
+    upsert_user(phone)
+    with get_conn() as conn:
+        cur = conn.execute(
+            _q(
+                """SELECT id FROM drills 
+                   WHERE phone_number = ? AND (question_text = ? OR user_response = '[In Progress]')
+                   ORDER BY id DESC LIMIT 1"""
+            ),
+            (phone, question),
+        )
+        row = cur.fetchone()
+        existing_id = _scalar(row) if row else None
+
+        if existing_id:
+            conn.execute(
+                _q(
+                    """UPDATE drills 
+                       SET user_response = '[Solution Revealed]', model_feedback = ?, score = 0
+                       WHERE id = ?"""
+                ),
+                (solution, existing_id),
+            )
+        else:
+            conn.execute(
+                _q(
+                    """INSERT INTO drills (phone_number, topic, question_text, user_response, model_feedback, score)
+                       VALUES (?, ?, ?, '[Solution Revealed]', ?, 0)"""
+                ),
+                (phone, topic or "general", question, solution),
+            )
+
+        conn.execute(
+            _q(
+                """UPDATE users
+                   SET questions_solved = COALESCE(questions_solved, 0) + 1
+                   WHERE phone_number = ?"""
+            ),
+            (phone,),
+        )
+
+
+def record_drill_skipped(phone: str, question: str | None = None) -> None:
+    """Record when a candidate skips an active drill question."""
+    upsert_user(phone)
+    with get_conn() as conn:
+        if question:
+            cur = conn.execute(
+                _q(
+                    """SELECT id FROM drills 
+                       WHERE phone_number = ? AND (question_text = ? OR user_response = '[In Progress]')
+                       ORDER BY id DESC LIMIT 1"""
+                ),
+                (phone, question),
+            )
+        else:
+            cur = conn.execute(
+                _q(
+                    """SELECT id FROM drills 
+                       WHERE phone_number = ? AND user_response = '[In Progress]'
+                       ORDER BY id DESC LIMIT 1"""
+                ),
+                (phone,),
+            )
+        row = cur.fetchone()
+        existing_id = _scalar(row) if row else None
+
+        if existing_id:
+            conn.execute(
+                _q(
+                    """UPDATE drills 
+                       SET user_response = '[Skipped]', model_feedback = 'Skipped by candidate', score = 0
+                       WHERE id = ?"""
+                ),
+                (existing_id,),
+            )
+        elif question:
+            conn.execute(
+                _q(
+                    """INSERT INTO drills (phone_number, topic, question_text, user_response, model_feedback, score)
+                       VALUES (?, 'general', ?, '[Skipped]', 'Skipped by candidate', 0)"""
+                ),
+                (phone, question),
+            )
+
 
 
 def stats(phone: str) -> dict[str, Any]:
@@ -702,29 +889,48 @@ def get_message_stats() -> dict[str, Any]:
     ensure_db()
     try:
         with get_conn() as conn:
-            total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-            inbound = conn.execute(
-                _q("SELECT COUNT(*) FROM messages WHERE direction = ?"), ("inbound",)
-            ).fetchone()[0]
-            outbound = conn.execute(
-                _q("SELECT COUNT(*) FROM messages WHERE direction = ?"), ("outbound",)
-            ).fetchone()[0]
-            button_clicks = conn.execute(
-                _q("SELECT COUNT(*) FROM messages WHERE msg_type = ?"), ("button_click",)
-            ).fetchone()[0]
-            telegram_count = conn.execute(
-                _q("SELECT COUNT(*) FROM messages WHERE channel = ?"), ("telegram",)
-            ).fetchone()[0]
-            whatsapp_count = conn.execute(
-                _q("SELECT COUNT(*) FROM messages WHERE channel = ?"), ("whatsapp",)
-            ).fetchone()[0]
-            users_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            drills_count = conn.execute("SELECT COUNT(*) FROM drills").fetchone()[0]
+            total = _scalar(conn.execute("SELECT COUNT(*) FROM messages").fetchone())
+            inbound = _scalar(
+                conn.execute(
+                    _q("SELECT COUNT(*) FROM messages WHERE direction = ?"), ("inbound",)
+                ).fetchone()
+            )
+            outbound = _scalar(
+                conn.execute(
+                    _q("SELECT COUNT(*) FROM messages WHERE direction = ?"), ("outbound",)
+                ).fetchone()
+            )
+            button_clicks = _scalar(
+                conn.execute(
+                    _q("SELECT COUNT(*) FROM messages WHERE msg_type = ?"), ("button_click",)
+                ).fetchone()
+            )
+            telegram_count = _scalar(
+                conn.execute(
+                    _q("SELECT COUNT(*) FROM messages WHERE channel = ?"), ("telegram",)
+                ).fetchone()
+            )
+            whatsapp_count = _scalar(
+                conn.execute(
+                    _q("SELECT COUNT(*) FROM messages WHERE channel = ?"), ("whatsapp",)
+                ).fetchone()
+            )
+            users_count = _scalar(conn.execute("SELECT COUNT(*) FROM users").fetchone())
+            drills_count = _scalar(conn.execute("SELECT COUNT(*) FROM drills").fetchone())
 
             today_date = date.today().isoformat()
-            today_count = conn.execute(
-                _q("SELECT COUNT(*) FROM messages WHERE DATE(created_at) = ?"), (today_date,)
-            ).fetchone()[0]
+            if _is_postgres():
+                today_count = _scalar(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM messages WHERE created_at::date = CURRENT_DATE"
+                    ).fetchone()
+                )
+            else:
+                today_count = _scalar(
+                    conn.execute(
+                        _q("SELECT COUNT(*) FROM messages WHERE DATE(created_at) = ?"), (today_date,)
+                    ).fetchone()
+                )
 
             return {
                 "total_messages": int(total),
@@ -865,9 +1071,9 @@ def get_latest_telegram_user() -> str | None:
     try:
         with get_conn() as conn:
             row = conn.execute(
-                "SELECT phone_number FROM users WHERE phone_number GLOB '[0-9]*' ORDER BY updated_at DESC LIMIT 1"
+                "SELECT phone_number FROM users WHERE phone_number GLOB '[0-9]*' ORDER BY created_at DESC LIMIT 1"
                 if not _is_postgres()
-                else "SELECT phone_number FROM users WHERE phone_number ~ '^[0-9]+$' ORDER BY updated_at DESC LIMIT 1"
+                else "SELECT phone_number FROM users WHERE phone_number ~ '^[0-9]+$' ORDER BY created_at DESC LIMIT 1"
             ).fetchone()
             if row:
                 return str(row[0] if isinstance(row, tuple) else row["phone_number"])

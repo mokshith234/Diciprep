@@ -1331,6 +1331,7 @@ def _start_drill(thread: Thread, phone: str, topic: str | None = None) -> None:
     try:
         db.set_pending(phone, question, chosen_topic, drill_remaining=2)
         db.reset_hints(phone)
+        db.log_drill_started(phone, chosen_topic, question)
     except Exception:
         log.exception("Failed to save pending question for %s", phone)
 
@@ -1396,6 +1397,7 @@ def _grade(thread: Thread, phone: str, question: str, answer: str, user: dict | 
                 nxt, chosen_topic = generate_question(track, difficulty=difficulty)
             db.set_pending(phone, nxt, chosen_topic, drill_remaining=remaining - 1)
             db.reset_hints(phone)
+            db.log_drill_started(phone, chosen_topic, nxt)
             post_chunks(thread, f"➡️ *Question {4 - remaining}/3*\n\n{nxt}", actions=DRILL_BUTTONS)
         except Exception:
             log.exception("Next drill question generation failed")
@@ -1443,6 +1445,11 @@ def _give_solution(thread: Thread, phone: str) -> None:
         return
     remaining = int((user or {}).get("drill_remaining") or 0)
     post_chunks(thread, body)
+    try:
+        db.record_solution_revealed(phone, pending, body, (user or {}).get("pending_topic") or track)
+    except Exception:
+        log.exception("Failed to record solution revealed for %s", phone)
+
     if remaining > 0:
         difficulty = (user or {}).get("difficulty") or "easy"
         target_company = (user or {}).get("target_company") or ""
@@ -1456,6 +1463,7 @@ def _give_solution(thread: Thread, phone: str) -> None:
                 nxt, chosen_topic = generate_question(track, difficulty=difficulty)
             db.set_pending(phone, nxt, chosen_topic, drill_remaining=remaining - 1)
             db.reset_hints(phone)
+            db.log_drill_started(phone, chosen_topic, nxt)
             post_chunks(thread, f"➡️ Next drill question:\n\n{nxt}", actions=DRILL_BUTTONS)
         except Exception:
             log.exception("Next question after solution failed")
@@ -1474,6 +1482,11 @@ def _skip_question(thread: Thread, phone: str) -> None:
     if not user or not user.get("pending_question"):
         thread.post("No active question to skip. Send *drill* to start one!")
         return
+    pending = user.get("pending_question")
+    try:
+        db.record_drill_skipped(phone, pending)
+    except Exception:
+        log.exception("Failed to record drill skipped for %s", phone)
     db.clear_pending(phone)
     thread.post(
         "⏭ *Question skipped!* No score deduction.\n\n"
