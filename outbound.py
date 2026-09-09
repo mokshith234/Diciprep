@@ -67,7 +67,15 @@ def send_telegram(chat_id: str, text: str, actions=None) -> None:
         for btn in actions:
             label = getattr(btn, "label", str(btn))
             data = getattr(btn, "data", label)
-            keyboard.append([{"text": str(label)[:64], "callback_data": str(data)[:64]}])
+            target_url = (
+                getattr(btn, "url", None)
+                or (str(data) if str(data).startswith(("http://", "https://")) else None)
+                or ("https://docs.google.com/forms/d/e/1FAIpQLSc8njVZKFo_9iivLLoDIjiOykw5Dql_KDdp3up4fHcstXdC-w/viewform" if data == "cmd:open_feedback" else None)
+            )
+            if target_url:
+                keyboard.append([{"text": str(label)[:64], "url": str(target_url)}])
+            else:
+                keyboard.append([{"text": str(label)[:64], "callback_data": str(data)[:64]}])
         reply_markup = {"inline_keyboard": keyboard}
     else:
         # Persistent Telegram Reply Keyboard — when pressed, text sends from the user's side

@@ -136,6 +136,7 @@ MENU_BUTTONS = (
     make_button("🎯 3-Question Mock", "cmd:drill"),
     make_button("📈 Prep Scorecard", "cmd:readiness"),
     make_button("📄 Scan Resume", "onboard:ai"),
+    make_button("📝 Feedback Form", "cmd:open_feedback"),
     make_button("🔄 Switch Mood", "cmd:switch_mood"),
 )
 
@@ -769,6 +770,19 @@ def _handle_text_inner(thread: Thread, msg: Message, text: str) -> None:
         return
     if cmd == "summary":
         _show_summary(thread, phone, user)
+        return
+    if cmd == "feedback":
+        thread.post(
+            "📝 *We Value Your Feedback!* 🎓\n\n"
+            "Help us make PlacementPrep AI smoother and more effective for your placements.\n"
+            "It takes less than 2 minutes to fill out:\n\n"
+            "👉 [Tap here to open Feedback Form](https://docs.google.com/forms/d/e/1FAIpQLSc8njVZKFo_9iivLLoDIjiOykw5Dql_KDdp3up4fHcstXdC-w/viewform)\n\n"
+            "Thank you for supporting our project! 🙏✨",
+            actions=(
+                make_button("📝 Open Feedback Form", "cmd:open_feedback"),
+                make_button("🎓 Main Menu", "cmd:menu"),
+            ),
+        )
         return
     # "resume" command without content — show instructions & sample buttons
     if cmd == "resume":

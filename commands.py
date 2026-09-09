@@ -110,6 +110,13 @@ COMMAND_ALIASES = {
     "scan resume": "resume",
     "readiness score": "readiness",
     "scorecard": "readiness",
+    # User feedback form
+    "feedback": "feedback",
+    "/feedback": "feedback",
+    "form": "feedback",
+    "survey": "feedback",
+    "cmd:feedback": "feedback",
+    "cmd:open_feedback": "feedback",
 }
 
 
